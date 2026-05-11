@@ -1,3 +1,6 @@
 [submodule "third_party/cva6"]
 	path = third_party/cva6
 	url = https://github.com/openhwgroup/cva6.git
+[submodule "third_party/vivado_acorn"]
+	path = third_party/vivado_acorn
+	url = git@github.com:sifferman/vivado_acorn.git

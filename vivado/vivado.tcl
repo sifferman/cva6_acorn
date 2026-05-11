@@ -10,6 +10,7 @@ set bd_tcl     [lindex $argv 4]
 set cva6_dir   [lindex $argv 5]
 set mig_prj    [lindex $argv 6]
 set target_cfg [lindex $argv 7]
+set xdc_file   [lindex $argv 8]
 
 create_project acorn_$variant $bd_name/ -part $part_name
 
@@ -100,7 +101,7 @@ add_files -norecurse [list \
 ]
 
 # Constraints ------------------------------------------------------------------
-add_files -fileset constrs_1 -norecurse {../vivado/acorn.xdc}
+add_files -fileset constrs_1 -norecurse $xdc_file
 set_property PROCESSING_ORDER EARLY [get_files -of_objects [get_filesets constrs_1]]
 
 # Block design -----------------------------------------------------------------

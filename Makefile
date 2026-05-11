@@ -32,8 +32,9 @@ endif
 # Run `git submodule update --init --recursive third_party/cva6` after clone.
 CVA6_DIR ?= $(CURDIR)/third_party/cva6
 
-# Reuse the MIG project from the proven vivado_acorn reference.
-MIG_PRJ ?= $(CURDIR)/references/vivado_acorn/mig_$(VARIANT).prj
+# Reuse the MIG and XDC from the proven vivado_acorn reference.
+MIG_PRJ ?= $(CURDIR)/third_party/vivado_acorn/mig_$(VARIANT).prj
+XDC_FILE ?= $(CURDIR)/third_party/vivado_acorn/sqrl_acorn.xdc
 
 BUILD_DIR := build
 BD_NAME   := cva6_acorn
@@ -48,13 +49,13 @@ TARGET_CFG ?= cv32a6_ima_sv32_fpga
 
 bitstream: $(BIT)
 
-$(BIT): vivado/bd.tcl vivado/vivado.tcl vivado/acorn.xdc vivado/shims/common_cells/registers.svh rtl/cva6_acorn_wrapper.v rtl/cva6_acorn_core.sv sw/bootrom/bootrom.memh
+$(BIT): vivado/bd.tcl vivado/vivado.tcl $(XDC_FILE) vivado/shims/common_cells/registers.svh rtl/cva6_acorn_wrapper.v rtl/cva6_acorn_core.sv sw/bootrom/bootrom.memh
 	rm -rf $(BUILD_DIR)/$(BD_NAME)
 	mkdir -p $(BUILD_DIR)
 	cd $(BUILD_DIR) && \
 	  vivado -nolog -nojournal -mode batch \
 	    -source ../vivado/vivado.tcl \
-	    -tclargs $(BD_NAME) $(VARIANT) $(PART_NAME) $(DRAM_SIZE) ../vivado/bd.tcl $(CVA6_DIR) $(MIG_PRJ) $(TARGET_CFG)
+	    -tclargs $(BD_NAME) $(VARIANT) $(PART_NAME) $(DRAM_SIZE) ../vivado/bd.tcl $(CVA6_DIR) $(MIG_PRJ) $(TARGET_CFG) $(XDC_FILE)
 
 # Program over JTAG (requires LiteX Acorn baseboard or external programmer).
 $(BUILD_DIR)/vivado-program.tcl:
