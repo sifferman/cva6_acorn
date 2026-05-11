@@ -103,46 +103,37 @@ sudo insmod ~/dma_ip_drivers/XDMA/linux-kernel/xdma/xdma.ko
 These are flagged because the design hasn't been synthesized yet and likely
 needs adjustment:
 
-1. **CVA6 source loading.** `vivado.tcl` invokes `make -C $CVA6_DIR
-   corev_apu/fpga/scripts/add_sources.tcl` to generate the source list. That
-   target may have unmet prereqs (e.g., openOCD, riscv-toolchain). Validate
-   with `make -C references/cva6 corev_apu/fpga/scripts/add_sources.tcl` first.
-
-2. **CVA6 config choice.** Wrapper picks up `cva6_config_pkg::cva6_cfg` — i.e.,
+1. **CVA6 config choice.** Wrapper picks up `cva6_config_pkg::cva6_cfg` — i.e.,
    whichever config is set in the cva6 build environment. `cv32a6_ima_sv32_fpga`
    is the smallest; even that may be tight on xc7a200t once XDMA + MIG are
    counted. Run `report_utilization` after synth and adjust.
 
-3. **Clock domain.** The wrapper currently runs CVA6 directly on `mig_7series_0/
+2. **Clock domain.** The wrapper currently runs CVA6 directly on `mig_7series_0/
    ui_clk` (~100 MHz at DDR3-800). CVA6 fmax on artix 200t is typically
    50 MHz. If timing fails, add an MMCM and an axi_clock_converter on the
    wrapper's m_axi.
 
-4. **Bootrom .memh path.** `axi_bram_init` is given `MEM_INIT_FILE = "bootrom.memh"`
+3. **Bootrom .memh path.** `axi_bram_init` is given `MEM_INIT_FILE = "bootrom.memh"`
    as a relative path. Vivado's `$readmemh` resolution at synth time is fussy
    — may need to copy `sw/bootrom/bootrom.memh` into the project's working
    directory or provide an absolute path via TCL.
 
-5. **AXI ID widths.** Wrapper assumes `AxiIdWidth=4`. CVA6's actual upstream ID
+4. **AXI ID widths.** Wrapper assumes `AxiIdWidth=4`. CVA6's actual upstream ID
    width depends on config (typically 4 in fpga configs). SmartConnect tolerates
    mismatched IDs but verify.
 
-6. **`assign_bd_address` will rename our hand-crafted segs.** Calling it after
+5. **`assign_bd_address` will rename our hand-crafted segs.** Calling it after
    manually creating address segs may be redundant or conflicting. If BD
    validation complains, drop the explicit `create_bd_addr_seg` calls and let
    `assign_bd_address` infer from connectivity.
 
-7. **CVA6 needs `ndmreset`, not just rst_n.** Real CVA6 setups gate reset on
+6. **CVA6 needs `ndmreset`, not just rst_n.** Real CVA6 setups gate reset on
    `ndmreset_n` (debug-module reset). Without a debug module instantiated we
    tie `debug_req_i = 0`, which is fine; just confirm CVA6 boots without an
    active OpenOCD.
 
-## References
+## Third-party code
 
-The `references/` tree contains read-only checkouts of:
-
-- [`cva6/`](references/cva6) — the core itself (openhwgroup/cva6).
-- [`cva6-sdk/`](references/cva6-sdk) — buildroot/Linux for CVA6 (boards: genesys2, agilex7).
-- [`cva6-platform/`](references/cva6-platform) — multicore CVA6 + CV-MESH (Genesys II / xc7k325t).
-- [`vivado_acorn/`](references/vivado_acorn) — proven XDMA + MIG flow on Acorn (this design's parent).
-- [`openpiton/`](references/openpiton) — multicore NoC (likely not used here, see M4).
+- [`third_party/cva6`](third_party/cva6) — CVA6 (openhwgroup/cva6) as a git
+  submodule. After cloning this repo: `git submodule update --init --recursive
+  third_party/cva6`.

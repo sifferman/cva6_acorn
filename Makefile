@@ -28,9 +28,9 @@ ifeq ($(VARIANT), cle215+)
     DRAM_SIZE := 1G
 endif
 
-# Where the CVA6 source tree lives. References/cva6 is a working tree the
-# user already has; replace with a proper submodule path later if desired.
-CVA6_DIR ?= $(CURDIR)/references/cva6
+# Where the CVA6 source tree lives. third_party/cva6 is a git submodule.
+# Run `git submodule update --init --recursive third_party/cva6` after clone.
+CVA6_DIR ?= $(CURDIR)/third_party/cva6
 
 # Reuse the MIG project from the proven vivado_acorn reference.
 MIG_PRJ ?= $(CURDIR)/references/vivado_acorn/mig_$(VARIANT).prj

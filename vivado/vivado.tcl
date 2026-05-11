@@ -34,7 +34,7 @@ lappend cva6_sources \
     "$cva6_dir/vendor/pulp-platform/fpga-support/rtl/SyncSpRam.sv"
 
 # Drop testbench-only / non-synthesisable .sv files that Flist still pulls in.
-# Mirrors the $(fpga_filter) list in references/cva6/Makefile.
+# Mirrors the $(fpga_filter) list in third_party/cva6/Makefile.
 set fpga_filter [list \
     "$cva6_dir/corev_apu/bootrom/bootrom.sv" \
     "$cva6_dir/core/include/instr_tracer_pkg.sv" \
