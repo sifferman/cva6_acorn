@@ -100,6 +100,10 @@ add_files -norecurse [list \
     "../rtl/axi_ctrl_regs.v" \
 ]
 
+# Bootrom $readmemh image
+add_files -norecurse "../sw/bootrom/bootrom.memh"
+set_property file_type {Memory File} [get_files *.memh]
+
 # Constraints ------------------------------------------------------------------
 add_files -fileset constrs_1 -norecurse $xdc_file
 set_property PROCESSING_ORDER EARLY [get_files -of_objects [get_filesets constrs_1]]

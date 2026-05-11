@@ -5,9 +5,12 @@
 # /dev/xdma0_h2c_0 and /dev/xdma0_c2h_0 character devices.
 set -euo pipefail
 
-XDMA_TOOLS_DIR="${XDMA_TOOLS_DIR:-$HOME/dma_ip_drivers/XDMA/linux-kernel/tools}"
-DMA_TO_DEV="${XDMA_TOOLS_DIR}/dma_to_device"
-DMA_FROM_DEV="${XDMA_TOOLS_DIR}/dma_from_device"
+DMA_TO_DEV="${DMA_TO_DEV:-$(command -v dma_to_device)}"
+DMA_FROM_DEV="${DMA_FROM_DEV:-$(command -v dma_from_device)}"
+if [[ -z "$DMA_TO_DEV" || -z "$DMA_FROM_DEV" ]]; then
+    echo "dma_to_device / dma_from_device not found on PATH" >&2
+    exit 1
+fi
 
 H2C=/dev/xdma0_h2c_0
 C2H=/dev/xdma0_c2h_0
@@ -26,21 +29,34 @@ if [[ ! -e "$H2C" ]]; then
 fi
 
 echo "[*] Holding CVA6 in reset"
-printf '\x00\x00\x00\x00' | "$DMA_TO_DEV" -d "$H2C" -a "$CTRL_BASE" -s 4 -f /dev/stdin
+printf '\x00\x00\x00\x00' | sudo "$DMA_TO_DEV" -d "$H2C" -a "$CTRL_BASE" -s 4 -f /dev/stdin
 
 echo "[*] Loading $HELLO_BIN into DRAM @ $DRAM_BASE"
 SIZE=$(stat -c%s "$HELLO_BIN")
-"$DMA_TO_DEV" -d "$H2C" -a "$DRAM_BASE" -s "$SIZE" -f "$HELLO_BIN"
+sudo "$DMA_TO_DEV" -d "$H2C" -a "$DRAM_BASE" -s "$SIZE" -f "$HELLO_BIN"
 
 echo "[*] Clearing console buffer header"
-printf '\x00\x00\x00\x00' | "$DMA_TO_DEV" -d "$H2C" -a "$CONSOLE_BASE" -s 4 -f /dev/stdin
+printf '\x00\x00\x00\x00' | sudo "$DMA_TO_DEV" -d "$H2C" -a "$CONSOLE_BASE" -s 4 -f /dev/stdin
 
 echo "[*] Releasing CVA6 reset"
-printf '\x01\x00\x00\x00' | "$DMA_TO_DEV" -d "$H2C" -a "$CTRL_BASE" -s 4 -f /dev/stdin
+printf '\x01\x00\x00\x00' | sudo "$DMA_TO_DEV" -d "$H2C" -a "$CTRL_BASE" -s 4 -f /dev/stdin
+
+TMP=$(mktemp /tmp/c2h.XXXXXX)
+rm -f "$TMP"
+trap 'sudo rm -f "$TMP"' EXIT
+
+c2h_read() {
+    local addr=$1 size=$2
+    sudo rm -f "$TMP"
+    sudo "$DMA_FROM_DEV" -d "$C2H" -a "$addr" -s "$size" -f "$TMP" > /dev/null
+    sudo chown "$USER:$USER" "$TMP"
+    sudo chmod 644 "$TMP"
+}
 
 echo "[*] Polling STATUS for completion"
 for i in $(seq 1 100); do
-    STATUS_HEX=$("$DMA_FROM_DEV" -d "$C2H" -a $((CTRL_BASE + CTRL_STATUS_OFF)) -s 4 -f /dev/stdout 2>/dev/null | xxd -p)
+    c2h_read $((CTRL_BASE + CTRL_STATUS_OFF)) 4
+    STATUS_HEX=$(xxd -p "$TMP")
     if [[ "$STATUS_HEX" != "00000000" ]]; then
         echo "[*] CVA6 signalled completion (status=$STATUS_HEX)"
         break
@@ -49,12 +65,14 @@ for i in $(seq 1 100); do
 done
 
 echo "[*] Reading console length"
-LEN_HEX=$("$DMA_FROM_DEV" -d "$C2H" -a "$CONSOLE_BASE" -s 4 -f /dev/stdout 2>/dev/null | xxd -p)
+c2h_read "$CONSOLE_BASE" 4
+LEN_HEX=$(xxd -p "$TMP")
 LEN=$((16#${LEN_HEX:6:2}${LEN_HEX:4:2}${LEN_HEX:2:2}${LEN_HEX:0:2}))
 echo "[*] Console length: $LEN bytes"
 
 if (( LEN > 0 && LEN < 65532 )); then
     echo "[*] Console contents:"
-    "$DMA_FROM_DEV" -d "$C2H" -a $((CONSOLE_BASE + 4)) -s "$LEN" -f /dev/stdout
+    c2h_read $((CONSOLE_BASE + 4)) "$LEN"
+    cat "$TMP"
     echo
 fi
