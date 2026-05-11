@@ -1,9 +1,8 @@
-# cva6_xdma
+# cva6_acorn
 
 CVA6 RISC-V softcore on the SQRL/RHS Acorn (xc7a200t) FPGA, accessed from the
 host PC over PCIe via Xilinx XDMA. Long-term goal: route RISC-V binaries to the
-FPGA from a host scheduler via `binfmt_misc`. See [official-pitch.md](official-pitch.md)
-for full project context.
+FPGA from a host scheduler via `binfmt_misc`.
 
 ## Layout
 
