@@ -114,9 +114,18 @@ set_property top design_1_wrapper [current_fileset]
 
 # Synthesis / implementation ---------------------------------------------------
 set_property STEPS.SYNTH_DESIGN.ARGS.FLATTEN_HIERARCHY none [get_runs synth_1]
+set_property STEPS.SYNTH_DESIGN.ARGS.RETIMING true [get_runs synth_1]
 set_property STEPS.SYNTH_DESIGN.ARGS.DIRECTIVE PerformanceOptimized [get_runs synth_1]
 launch_runs synth_1 -jobs [exec nproc]
 wait_on_run synth_1
+
+# Implementation tuning ------------------------------------------------------
+set_property STEPS.PLACE_DESIGN.ARGS.DIRECTIVE               ExtraTimingOpt    [get_runs impl_1]
+set_property STEPS.PHYS_OPT_DESIGN.IS_ENABLED                true              [get_runs impl_1]
+set_property STEPS.PHYS_OPT_DESIGN.ARGS.DIRECTIVE            AggressiveExplore [get_runs impl_1]
+set_property STEPS.ROUTE_DESIGN.ARGS.DIRECTIVE               AggressiveExplore [get_runs impl_1]
+set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.IS_ENABLED     true              [get_runs impl_1]
+set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.ARGS.DIRECTIVE AggressiveExplore [get_runs impl_1]
 
 launch_runs impl_1 -to_step write_bitstream -jobs [exec nproc]
 wait_on_run impl_1
