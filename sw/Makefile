@@ -1,8 +1,8 @@
 # Build bootrom (.memh for axi_bram_init $readmemh) and DRAM firmware (hello.bin).
 
-CROSS ?= riscv32-unknown-elf-
-ARCH  ?= rv32ima
-ABI   ?= ilp32
+CROSS ?= riscv64-unknown-elf-
+ARCH  ?= rv64imafdc
+ABI   ?= lp64
 
 CC      := $(CROSS)gcc
 OBJCOPY := $(CROSS)objcopy

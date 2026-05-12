@@ -77,12 +77,43 @@ connect_bd_net [get_bd_pins mig_7series_0/ui_clk] [get_bd_pins xdma_axi_cc/m_axi
 connect_bd_net [get_bd_pins ui_rstn_inv/Res]      [get_bd_pins xdma_axi_cc/m_axi_aresetn]
 
 ##############
+# CVA6 clock — config-dependent MMCM off the MIG's 100 MHz ui_clk so heavy
+# CVA6 configs (e.g. cv64a6_imafdc_sv39) can run slower without dragging
+# down the MIG, XDMA, and peripherals.
+##############
+
+create_bd_cell -type ip -vlnv xilinx.com:ip:clk_wiz:6.0 cpu_clk_gen
+set_property -dict [list \
+    CONFIG.PRIM_IN_FREQ               {100.000} \
+    CONFIG.CLKOUT1_REQUESTED_OUT_FREQ $cpu_freq_mhz \
+    CONFIG.RESET_PORT                 {resetn} \
+    CONFIG.RESET_TYPE                 {ACTIVE_LOW} \
+    CONFIG.USE_LOCKED                 {true} \
+] [get_bd_cells cpu_clk_gen]
+connect_bd_net [get_bd_pins mig_7series_0/ui_clk] [get_bd_pins cpu_clk_gen/clk_in1]
+connect_bd_net [get_bd_pins ui_rstn_inv/Res]      [get_bd_pins cpu_clk_gen/resetn]
+
+# Reset synchroniser for the cpu_clk domain.
+create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 cpu_rstgen
+connect_bd_net [get_bd_pins cpu_clk_gen/clk_out1] [get_bd_pins cpu_rstgen/slowest_sync_clk]
+connect_bd_net [get_bd_pins cpu_clk_gen/locked]   [get_bd_pins cpu_rstgen/dcm_locked]
+connect_bd_net [get_bd_pins ui_rstn_inv/Res]      [get_bd_pins cpu_rstgen/ext_reset_in]
+
+##############
 # CVA6 wrapper (RTL module)
 ##############
 
 create_bd_cell -type module -reference cva6_acorn_wrapper cva6_0
-connect_bd_net [get_bd_pins mig_7series_0/ui_clk] [get_bd_pins cva6_0/clk]
-# rst_n comes from ctrl_regs (host-controlled). Wired below.
+connect_bd_net [get_bd_pins cpu_clk_gen/clk_out1] [get_bd_pins cva6_0/clk]
+# rst_n comes from ctrl_regs (host-controlled, AND-ed with cpu_clk domain reset). Wired below.
+
+# AXI clock converter: CVA6 master on cpu_clk -> SmartConnect on ui_clk.
+create_bd_cell -type ip -vlnv xilinx.com:ip:axi_clock_converter:2.1 cva6_axi_cc
+connect_bd_intf_net [get_bd_intf_pins cva6_0/m_axi] [get_bd_intf_pins cva6_axi_cc/S_AXI]
+connect_bd_net [get_bd_pins cpu_clk_gen/clk_out1]    [get_bd_pins cva6_axi_cc/s_axi_aclk]
+connect_bd_net [get_bd_pins cpu_rstgen/peripheral_aresetn] [get_bd_pins cva6_axi_cc/s_axi_aresetn]
+connect_bd_net [get_bd_pins mig_7series_0/ui_clk]    [get_bd_pins cva6_axi_cc/m_axi_aclk]
+connect_bd_net [get_bd_pins ui_rstn_inv/Res]         [get_bd_pins cva6_axi_cc/m_axi_aresetn]
 
 ##############
 # AXI SmartConnect — 2 masters (XDMA, CVA6), 4 slaves
@@ -97,9 +128,9 @@ set_property -dict [list \
 connect_bd_net [get_bd_pins mig_7series_0/ui_clk] [get_bd_pins axi_smc/aclk]
 connect_bd_net [get_bd_pins ui_rstn_inv/Res]      [get_bd_pins axi_smc/aresetn]
 
-connect_bd_intf_net [get_bd_intf_pins xdma_axi_cc/M_AXI] [get_bd_intf_pins axi_smc/S00_AXI]
-connect_bd_intf_net [get_bd_intf_pins cva6_0/m_axi]      [get_bd_intf_pins axi_smc/S01_AXI]
-connect_bd_intf_net [get_bd_intf_pins axi_smc/M00_AXI]   [get_bd_intf_pins mig_7series_0/S_AXI]
+connect_bd_intf_net [get_bd_intf_pins xdma_axi_cc/M_AXI]  [get_bd_intf_pins axi_smc/S00_AXI]
+connect_bd_intf_net [get_bd_intf_pins cva6_axi_cc/M_AXI]  [get_bd_intf_pins axi_smc/S01_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_smc/M00_AXI]    [get_bd_intf_pins mig_7series_0/S_AXI]
 
 ##############
 # Bootrom (axi_bram_init) — 4 KB at 0x10000
@@ -132,9 +163,14 @@ connect_bd_net [get_bd_pins mig_7series_0/ui_clk] [get_bd_pins ctrl_0/axi_clk]
 connect_bd_net [get_bd_pins ui_rstn_inv/Res]      [get_bd_pins ctrl_0/axi_resetn]
 connect_bd_intf_net [get_bd_intf_pins axi_smc/M03_AXI] [get_bd_intf_pins ctrl_0/s_axi]
 
-# CVA6 reset is held until host writes ctrl_regs[CTRL_RESET]=0.
-# ctrl_regs/cva6_rst_n is asserted on system reset and released on host write.
-connect_bd_net [get_bd_pins ctrl_0/cva6_rst_n] [get_bd_pins cva6_0/rst_n]
+# CVA6 reset = (host-controlled ctrl_regs/cva6_rst_n) AND (cpu_clk-domain
+# synchronised system reset). Both are active-low; util_vector_logic AND
+# asserts the CVA6 reset if either source asserts.
+create_bd_cell -type ip -vlnv xilinx.com:ip:util_vector_logic:2.0 cva6_rst_and
+set_property -dict [list CONFIG.C_OPERATION {and} CONFIG.C_SIZE {1}] [get_bd_cells cva6_rst_and]
+connect_bd_net [get_bd_pins ctrl_0/cva6_rst_n]              [get_bd_pins cva6_rst_and/Op1]
+connect_bd_net [get_bd_pins cpu_rstgen/peripheral_aresetn]  [get_bd_pins cva6_rst_and/Op2]
+connect_bd_net [get_bd_pins cva6_rst_and/Res]               [get_bd_pins cva6_0/rst_n]
 
 # Host-to-CVA6 IRQ doorbell (level): ctrl_regs/host_irq drives PLIC src 1 in cva6_0.
 connect_bd_net [get_bd_pins ctrl_0/host_irq] [get_bd_pins cva6_0/host_irq]

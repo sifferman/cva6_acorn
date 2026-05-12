@@ -42,7 +42,15 @@ BD_NAME   := cva6_acorn
 BIT := $(BUILD_DIR)/$(BD_NAME)/acorn_$(VARIANT).runs/impl_1/design_1_wrapper.bit
 
 # Which CVA6 config to synthesise. Selects an entry in core/Flist.cva6.
-TARGET_CFG ?= cv32a6_ima_sv32_fpga
+TARGET_CFG ?= cv64a6_imafdc_sv39
+
+# CVA6 clock frequency (MHz). Heavy configs can't close at 100 MHz; the rest
+# of the design (MIG, XDMA, peripherals) stays at 100 MHz regardless.
+ifeq ($(TARGET_CFG),cv64a6_imafdc_sv39)
+    CPU_FREQ_MHZ ?= 50
+else
+    CPU_FREQ_MHZ ?= 100
+endif
 
 .PHONY: bitstream program fw clean
 .SECONDARY:
@@ -55,7 +63,7 @@ $(BIT): vivado/bd.tcl vivado/vivado.tcl $(XDC_FILE) vivado/shims/common_cells/re
 	cd $(BUILD_DIR) && \
 	  vivado -nolog -nojournal -mode batch \
 	    -source ../vivado/vivado.tcl \
-	    -tclargs $(BD_NAME) $(VARIANT) $(PART_NAME) $(DRAM_SIZE) ../vivado/bd.tcl $(CVA6_DIR) $(MIG_PRJ) $(TARGET_CFG) $(XDC_FILE)
+	    -tclargs $(BD_NAME) $(VARIANT) $(PART_NAME) $(DRAM_SIZE) ../vivado/bd.tcl $(CVA6_DIR) $(MIG_PRJ) $(TARGET_CFG) $(XDC_FILE) $(CPU_FREQ_MHZ)
 
 # Program over JTAG (requires LiteX Acorn baseboard or external programmer).
 $(BUILD_DIR)/vivado-program.tcl:

@@ -2,15 +2,16 @@
 # Vivado project bootstrap for cva6_xdma.
 #
 # Args (from Makefile):
-set bd_name    [lindex $argv 0]
-set variant    [lindex $argv 1]
-set part_name  [lindex $argv 2]
-set dram_size  [lindex $argv 3]
-set bd_tcl     [lindex $argv 4]
-set cva6_dir   [lindex $argv 5]
-set mig_prj    [lindex $argv 6]
-set target_cfg [lindex $argv 7]
-set xdc_file   [lindex $argv 8]
+set bd_name      [lindex $argv 0]
+set variant      [lindex $argv 1]
+set part_name    [lindex $argv 2]
+set dram_size    [lindex $argv 3]
+set bd_tcl       [lindex $argv 4]
+set cva6_dir     [lindex $argv 5]
+set mig_prj      [lindex $argv 6]
+set target_cfg   [lindex $argv 7]
+set xdc_file     [lindex $argv 8]
+set cpu_freq_mhz [lindex $argv 9]
 
 create_project acorn_$variant $bd_name/ -part $part_name
 
@@ -124,9 +125,12 @@ launch_runs synth_1 -jobs [exec nproc]
 wait_on_run synth_1
 
 # Implementation tuning ------------------------------------------------------
+set_property STEPS.OPT_DESIGN.TCL.PRE                        [file normalize ../vivado/pre_opt_design.tcl] [get_runs impl_1]
 set_property STEPS.PLACE_DESIGN.ARGS.DIRECTIVE               ExtraTimingOpt    [get_runs impl_1]
 set_property STEPS.PHYS_OPT_DESIGN.IS_ENABLED                true              [get_runs impl_1]
 set_property STEPS.PHYS_OPT_DESIGN.ARGS.DIRECTIVE            AggressiveExplore [get_runs impl_1]
+set_property STEPS.PHYS_OPT_DESIGN.TCL.PRE                   [file normalize ../vivado/pre_phys_opt_design.tcl]  [get_runs impl_1]
+set_property STEPS.PHYS_OPT_DESIGN.TCL.POST                  [file normalize ../vivado/post_phys_opt_design.tcl] [get_runs impl_1]
 set_property STEPS.ROUTE_DESIGN.ARGS.DIRECTIVE               AggressiveExplore [get_runs impl_1]
 set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.IS_ENABLED     true              [get_runs impl_1]
 set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.ARGS.DIRECTIVE AggressiveExplore [get_runs impl_1]
