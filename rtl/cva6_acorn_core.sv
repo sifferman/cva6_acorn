@@ -2,11 +2,6 @@
 //
 // Exposes a plain-Verilog AXI4 master so Vivado IP Integrator can connect it
 // to the SmartConnect without seeing any SystemVerilog struct types.
-//
-// Bus widths target the cv32a6_ima_sv32_fpga config (RV32IMA, no FPU, no
-// caches) — the smallest CVA6 config and the only one likely to close on
-// xc7a200t with XDMA + MIG also in the design. Switch to a 64-bit config once
-// utilization is known.
 
 `include "axi/assign.svh"
 `include "axi/typedef.svh"

@@ -5,14 +5,12 @@
 // firmware writes a 4-byte little-endian length at offset 0, then ASCII bytes
 // starting at offset 4. The host reads the length, then reads that many
 // bytes.
-//
-// Plain Verilog (.v) — see note in axi_bram_init.v.
 
 module axi_console_buffer #(
     parameter ADDR_WIDTH  = 64,
     parameter DATA_WIDTH  = 64,
     parameter ID_WIDTH    = 4,
-    parameter DEPTH_WORDS = 8192             // 8192 * 8 B = 64 KB
+    parameter DEPTH_WORDS = 8192
 ) (
     input  wire                      axi_clk,
     input  wire                      axi_resetn,
@@ -70,18 +68,15 @@ module axi_console_buffer #(
     reg [DATA_WIDTH-1:0] mem [0:DEPTH_WORDS-1];
 
     // --- Write channel --------------------------------------------------------
-    reg [IDX_BITS-1:0]   w_idx_q,   w_idx_d;
-    reg                  aw_seen_q, aw_seen_d;
-    reg [ID_WIDTH-1:0]   aw_id_q,   aw_id_d;
-    reg                  bvalid_q,  bvalid_d;
-    reg [ID_WIDTH-1:0]   bid_q,     bid_d;
-    reg [1:0]            bresp_q,   bresp_d;
-    // Strobed memory write derived combinationally from the W beat.
-    reg                  mem_we;
-    reg [IDX_BITS-1:0]   mem_waddr;
-    reg [DATA_WIDTH-1:0] mem_wdata_masked;
+    reg [IDX_BITS-1:0]   w_idx_d,   w_idx_q;
+    reg                  aw_seen_d, aw_seen_q;
+    reg [ID_WIDTH-1:0]   aw_id_d,   aw_id_q;
+    reg                  bvalid_d,  bvalid_q;
+    reg [ID_WIDTH-1:0]   bid_d,     bid_q;
+    reg [1:0]            bresp_d,   bresp_q;
 
-    integer b;
+    wire mem_we = s_axi_wvalid && s_axi_wready;
+
     always @* begin
         w_idx_d   = w_idx_q;
         aw_seen_d = aw_seen_q;
@@ -90,23 +85,13 @@ module axi_console_buffer #(
         bid_d     = bid_q;
         bresp_d   = bresp_q;
 
-        mem_we           = 1'b0;
-        mem_waddr        = w_idx_q;
-        mem_wdata_masked = {DATA_WIDTH{1'b0}};
-
         if (s_axi_awvalid && s_axi_awready) begin
             aw_seen_d = 1'b1;
             aw_id_d   = s_axi_awid;
             w_idx_d   = s_axi_awaddr[SUBWORD_BITS+IDX_BITS-1 : SUBWORD_BITS];
         end
 
-        if (s_axi_wvalid && s_axi_wready) begin
-            mem_we    = 1'b1;
-            mem_waddr = w_idx_q;
-            for (b = 0; b < BYTES_PER_WORD; b = b + 1) begin
-                mem_wdata_masked[8*b +: 8] = s_axi_wstrb[b] ? s_axi_wdata[8*b +: 8]
-                                                            : mem[w_idx_q][8*b +: 8];
-            end
+        if (mem_we) begin
             w_idx_d = w_idx_q + 1'b1;
             if (s_axi_wlast && !bvalid_q) begin
                 bvalid_d = 1'b1;
@@ -139,10 +124,15 @@ module axi_console_buffer #(
         end
     end
 
-    // Memory write — kept in its own always block to be recognized as a
-    // single-write-port BRAM by synthesis.
+    // Byte-write-enable BRAM
+    integer b;
     always @(posedge axi_clk) begin
-        if (mem_we) mem[mem_waddr] <= mem_wdata_masked;
+        if (mem_we) begin
+            for (b = 0; b < BYTES_PER_WORD; b = b + 1) begin
+                if (s_axi_wstrb[b])
+                    mem[w_idx_q][8*b +: 8] <= s_axi_wdata[8*b +: 8];
+            end
+        end
     end
 
     assign s_axi_awready = !aw_seen_q;
@@ -152,21 +142,25 @@ module axi_console_buffer #(
     assign s_axi_bresp   = bresp_q;
 
     // --- Read channel ---------------------------------------------------------
-    reg [8:0]            r_count_q, r_count_d;
-    reg [IDX_BITS-1:0]   r_idx_q,   r_idx_d;
-    reg [ID_WIDTH-1:0]   r_id_q,    r_id_d;
-    reg                  rvalid_q,  rvalid_d;
-    reg [DATA_WIDTH-1:0] rdata_q,   rdata_d;
-    reg [ID_WIDTH-1:0]   rid_q,     rid_d;
-    reg                  rlast_q,   rlast_d;
-    reg [1:0]            rresp_q,   rresp_d;
+    // BRAM read is synchronous: `rdata_q <= mem[r_idx_q]` runs inside the
+    // clocked block so Vivado can map `mem` to a BRAM with a registered read
+    // port (no distributed-RAM async read needed).
+    reg [8:0]            r_count_d, r_count_q;
+    reg [IDX_BITS-1:0]   r_idx_d,   r_idx_q;
+    reg [ID_WIDTH-1:0]   r_id_d,    r_id_q;
+    reg                  rvalid_d,  rvalid_q;
+    reg [DATA_WIDTH-1:0] rdata_q;
+    reg [ID_WIDTH-1:0]   rid_d,     rid_q;
+    reg                  rlast_d,   rlast_q;
+    reg [1:0]            rresp_d,   rresp_q;
+
+    wire read_fire = (r_count_q != 0) && (!rvalid_q || s_axi_rready);
 
     always @* begin
         r_count_d = r_count_q;
         r_idx_d   = r_idx_q;
         r_id_d    = r_id_q;
         rvalid_d  = rvalid_q;
-        rdata_d   = rdata_q;
         rid_d     = rid_q;
         rlast_d   = rlast_q;
         rresp_d   = rresp_q;
@@ -176,9 +170,8 @@ module axi_console_buffer #(
             r_idx_d   = s_axi_araddr[SUBWORD_BITS+IDX_BITS-1 : SUBWORD_BITS];
             r_id_d    = s_axi_arid;
         end
-        if (r_count_q != 0 && (!rvalid_q || s_axi_rready)) begin
+        if (read_fire) begin
             rvalid_d  = 1'b1;
-            rdata_d   = mem[r_idx_q];
             rid_d     = r_id_q;
             rlast_d   = (r_count_q == 9'd1);
             rresp_d   = 2'b00;
@@ -196,7 +189,6 @@ module axi_console_buffer #(
             r_idx_q   <= {IDX_BITS{1'b0}};
             r_id_q    <= {ID_WIDTH{1'b0}};
             rvalid_q  <= 1'b0;
-            rdata_q   <= {DATA_WIDTH{1'b0}};
             rid_q     <= {ID_WIDTH{1'b0}};
             rlast_q   <= 1'b0;
             rresp_q   <= 2'b00;
@@ -205,11 +197,11 @@ module axi_console_buffer #(
             r_idx_q   <= r_idx_d;
             r_id_q    <= r_id_d;
             rvalid_q  <= rvalid_d;
-            rdata_q   <= rdata_d;
             rid_q     <= rid_d;
             rlast_q   <= rlast_d;
             rresp_q   <= rresp_d;
         end
+        if (read_fire) rdata_q <= mem[r_idx_q];
     end
 
     assign s_axi_arready = (r_count_q == 0);

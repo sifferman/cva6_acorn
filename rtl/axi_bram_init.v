@@ -7,10 +7,6 @@
 //     from the BRAM register file (registered output, 1-cycle latency).
 //   - Word width matches the bus (64 bits). The bootrom .memh file is generated
 //     at the 64-bit word granularity.
-//
-// Plain Verilog (.v) is required so Vivado IPI can use this module via
-// `create_bd_cell -type module -reference` — SystemVerilog top files are
-// rejected for BD module references. _d/_q two-block style preserved.
 
 module axi_bram_init #(
     parameter ADDR_WIDTH    = 64,
@@ -79,12 +75,12 @@ module axi_bram_init #(
     end
 
     // --- Write channel: accept and discard (read-only ROM) --------------------
-    reg                  aw_seen_q,     aw_seen_d;
-    reg                  w_last_seen_q, w_last_seen_d;
-    reg [ID_WIDTH-1:0]   aw_id_q,       aw_id_d;
-    reg                  bvalid_q,      bvalid_d;
-    reg [ID_WIDTH-1:0]   bid_q,         bid_d;
-    reg [1:0]            bresp_q,       bresp_d;
+    reg                  aw_seen_d,     aw_seen_q;
+    reg                  w_last_seen_d, w_last_seen_q;
+    reg [ID_WIDTH-1:0]   aw_id_d,       aw_id_q;
+    reg                  bvalid_d,      bvalid_q;
+    reg [ID_WIDTH-1:0]   bid_d,         bid_q;
+    reg [1:0]            bresp_d,       bresp_q;
 
     always @* begin
         aw_seen_d     = aw_seen_q;
@@ -138,14 +134,14 @@ module axi_bram_init #(
     assign s_axi_bresp   = bresp_q;
 
     // --- Read channel ---------------------------------------------------------
-    reg [8:0]            r_count_q, r_count_d;
-    reg [IDX_BITS-1:0]   r_idx_q,   r_idx_d;
-    reg [ID_WIDTH-1:0]   r_id_q,    r_id_d;
-    reg                  rvalid_q,  rvalid_d;
-    reg [DATA_WIDTH-1:0] rdata_q,   rdata_d;
-    reg [ID_WIDTH-1:0]   rid_q,     rid_d;
-    reg                  rlast_q,   rlast_d;
-    reg [1:0]            rresp_q,   rresp_d;
+    reg [8:0]            r_count_d, r_count_q;
+    reg [IDX_BITS-1:0]   r_idx_d,   r_idx_q;
+    reg [ID_WIDTH-1:0]   r_id_d,    r_id_q;
+    reg                  rvalid_d,  rvalid_q;
+    reg [DATA_WIDTH-1:0] rdata_d,   rdata_q;
+    reg [ID_WIDTH-1:0]   rid_d,     rid_q;
+    reg                  rlast_d,   rlast_q;
+    reg [1:0]            rresp_d,   rresp_q;
 
     always @* begin
         r_count_d = r_count_q;

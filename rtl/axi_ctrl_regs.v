@@ -7,8 +7,6 @@
 //   0x0C SCRATCH free for host/firmware to use
 //
 // All other addresses read as zero.
-//
-// Plain Verilog (.v) — see note in axi_bram_init.v.
 
 module axi_ctrl_regs #(
     parameter ADDR_WIDTH = 64,
@@ -71,10 +69,10 @@ module axi_ctrl_regs #(
 );
 
     // --- Registers ------------------------------------------------------------
-    reg [31:0] reg_ctrl_q,     reg_ctrl_d;
-    reg [31:0] reg_doorbell_q, reg_doorbell_d;
-    reg [31:0] reg_status_q,   reg_status_d;
-    reg [31:0] reg_scratch_q,  reg_scratch_d;
+    reg [31:0] reg_ctrl_d,     reg_ctrl_q;
+    reg [31:0] reg_doorbell_d, reg_doorbell_q;
+    reg [31:0] reg_status_d,   reg_status_q;
+    reg [31:0] reg_scratch_d,  reg_scratch_q;
 
     assign cva6_rst_n   = reg_ctrl_q[0] & axi_resetn;
     assign host_irq     = reg_doorbell_q[0];
@@ -105,12 +103,12 @@ module axi_ctrl_regs #(
     endfunction
 
     // --- Write channel --------------------------------------------------------
-    reg [3:0]            w_off_q,   w_off_d;
-    reg                  aw_seen_q, aw_seen_d;
-    reg [ID_WIDTH-1:0]   aw_id_q,   aw_id_d;
-    reg                  bvalid_q,  bvalid_d;
-    reg [ID_WIDTH-1:0]   bid_q,     bid_d;
-    reg [1:0]            bresp_q,   bresp_d;
+    reg [3:0]            w_off_d,   w_off_q;
+    reg                  aw_seen_d, aw_seen_q;
+    reg [ID_WIDTH-1:0]   aw_id_d,   aw_id_q;
+    reg                  bvalid_d,  bvalid_q;
+    reg [ID_WIDTH-1:0]   bid_d,     bid_q;
+    reg [1:0]            bresp_d,   bresp_q;
 
     reg [31:0] w_din;
     reg [3:0]  w_strb;
@@ -190,14 +188,14 @@ module axi_ctrl_regs #(
     assign s_axi_bresp   = bresp_q;
 
     // --- Read channel ---------------------------------------------------------
-    reg [8:0]            r_count_q, r_count_d;
-    reg [3:0]            r_off_q,   r_off_d;
-    reg [ID_WIDTH-1:0]   r_id_q,    r_id_d;
-    reg                  rvalid_q,  rvalid_d;
-    reg [DATA_WIDTH-1:0] rdata_q,   rdata_d;
-    reg [ID_WIDTH-1:0]   rid_q,     rid_d;
-    reg                  rlast_q,   rlast_d;
-    reg [1:0]            rresp_q,   rresp_d;
+    reg [8:0]            r_count_d, r_count_q;
+    reg [3:0]            r_off_d,   r_off_q;
+    reg [ID_WIDTH-1:0]   r_id_d,    r_id_q;
+    reg                  rvalid_d,  rvalid_q;
+    reg [DATA_WIDTH-1:0] rdata_d,   rdata_q;
+    reg [ID_WIDTH-1:0]   rid_d,     rid_q;
+    reg                  rlast_d,   rlast_q;
+    reg [1:0]            rresp_d,   rresp_q;
 
     always @* begin
         r_count_d = r_count_q;
