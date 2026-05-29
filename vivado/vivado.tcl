@@ -13,7 +13,7 @@ set target_cfg   [lindex $argv 7]
 set xdc_file     [lindex $argv 8]
 set cpu_freq_mhz [lindex $argv 9]
 
-create_project acorn_$variant $bd_name/ -part $part_name
+create_project $variant $bd_name/ -part $part_name
 
 # CVA6 sources
 set ::env(CVA6_REPO_DIR) $cva6_dir

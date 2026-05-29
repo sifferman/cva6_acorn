@@ -163,14 +163,14 @@ connect_bd_net [get_bd_pins mig_7series_0/ui_clk] [get_bd_pins ctrl_0/axi_clk]
 connect_bd_net [get_bd_pins ui_rstn_inv/Res]      [get_bd_pins ctrl_0/axi_resetn]
 connect_bd_intf_net [get_bd_intf_pins axi_smc/M03_AXI] [get_bd_intf_pins ctrl_0/s_axi]
 
-# CVA6 reset = (host-controlled ctrl_regs/cva6_rst_n) AND (cpu_clk-domain
-# synchronised system reset). Both are active-low; util_vector_logic AND
-# asserts the CVA6 reset if either source asserts.
-create_bd_cell -type ip -vlnv xilinx.com:ip:util_vector_logic:2.0 cva6_rst_and
-set_property -dict [list CONFIG.C_OPERATION {and} CONFIG.C_SIZE {1}] [get_bd_cells cva6_rst_and]
-connect_bd_net [get_bd_pins ctrl_0/cva6_rst_n]              [get_bd_pins cva6_rst_and/Op1]
-connect_bd_net [get_bd_pins cpu_rstgen/peripheral_aresetn]  [get_bd_pins cva6_rst_and/Op2]
-connect_bd_net [get_bd_pins cva6_rst_and/Res]               [get_bd_pins cva6_0/rst_n]
+# CVA6 reset: feed the host-controlled reset (ctrl_regs/cva6_rst_n, launched in
+# the ui_clk/axi domain) through cpu_rstgen's aux_reset_in so proc_sys_reset
+# synchronises its release to cpu_clk. This replaces the old combinational AND,
+# which crossed ui_clk->cpu_clk (related clocks via the MMCM) unsynchronised and
+# produced a ~23k-fanout reset with negative hold slack. aux_reset_in is
+# active-low by default, matching cva6_rst_n.
+connect_bd_net [get_bd_pins ctrl_0/cva6_rst_n]              [get_bd_pins cpu_rstgen/aux_reset_in]
+connect_bd_net [get_bd_pins cpu_rstgen/peripheral_aresetn]  [get_bd_pins cva6_0/rst_n]
 
 # Host-to-CVA6 IRQ doorbell (level): ctrl_regs/host_irq drives PLIC src 1 in cva6_0.
 connect_bd_net [get_bd_pins ctrl_0/host_irq] [get_bd_pins cva6_0/host_irq]
