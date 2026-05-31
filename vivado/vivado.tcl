@@ -92,12 +92,13 @@ read_verilog -sv $cva6_headers
 set_property -dict {file_type {Verilog Header} is_global_include 1} \
     -objects [get_files -of_objects [get_filesets sources_1] $cva6_headers]
 
-# Project-local RTL (wrapper, bootrom, console buffer) -------------------------
+# Project-local RTL (wrapper, bootrom, UART/finisher, ctrl) --------------------
 add_files -norecurse [list \
     "../rtl/cva6_acorn_wrapper.v" \
     "../rtl/cva6_acorn_core.sv" \
     "../rtl/axi_bram_init.v" \
-    "../rtl/axi_console_buffer.v" \
+    "../rtl/axi_uart16550.v" \
+    "../rtl/axi_sifive_test.v" \
     "../rtl/axi_ctrl_regs.v" \
 ]
 

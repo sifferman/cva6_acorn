@@ -126,8 +126,12 @@ module axi_ctrl_regs #(
         bid_d     = bid_q;
         bresp_d   = bresp_q;
 
-        w_din  = s_axi_wdata[8*w_off_q +: 32];
-        w_strb = s_axi_wstrb[w_off_q +: 4];
+        // On the 64-bit bus the byte lane is the offset *within* the bus word
+        // (addr[2:0] -> 0 or 4), not the full register offset. Using the full
+        // offset indexed past the bus for STATUS (0x8)/SCRATCH (0xC), so those
+        // writes silently dropped. Register select still uses (off & 4'hC).
+        w_din  = s_axi_wdata[8*(w_off_q & 4'h4) +: 32];
+        w_strb = s_axi_wstrb[  (w_off_q & 4'h4) +: 4];
 
         if (s_axi_awvalid && s_axi_awready) begin
             aw_seen_d = 1'b1;
@@ -214,7 +218,10 @@ module axi_ctrl_regs #(
         end
         if (r_count_q != 0 && (!rvalid_q || s_axi_rready)) begin
             rvalid_d  = 1'b1;
-            rdata_d   = {32'h0, read_reg(r_off_q)};
+            // Place the selected 32-bit reg in the byte lane the master reads
+            // (offset within the 64-bit word). Without the shift, reads of the
+            // upper-lane regs (0x4/0xC) returned 0.
+            rdata_d   = {32'h0, read_reg(r_off_q)} << (8 * (r_off_q & 4'h4));
             rid_d     = r_id_q;
             rlast_d   = (r_count_q == 9'd1);
             rresp_d   = 2'b00;

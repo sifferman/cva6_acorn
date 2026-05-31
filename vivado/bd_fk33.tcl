@@ -1,9 +1,11 @@
 
-# Block design: XDMA + HBM + CVA6 + bootrom + console + ctrl regs + I2C/PMIC
+# Block design: XDMA + HBM + CVA6 + bootrom + 16550 UART + finisher + ctrl + I2C
 #
 # Forest Kitten 33 (xcvu33p) variant of the cva6_xdma design.
-# Modeled on SQRL_FK33/projects/fk33_example.tcl for HBM/clocking/PCIe topology,
-# with the CVA6 master, bootrom, console buffer, and ctrl regs from the Acorn BD.
+# Modeled on SQRL_FK33/projects/fk33_example.tcl for HBM/clocking/PCIe topology.
+# Guest-visible peripherals mirror the QEMU `virt` machine (UART0 @ 0x10000000,
+# VIRT_TEST finisher @ 0x100000, DRAM @ 0x80000000) so the same baremetal RV64
+# binary runs on QEMU and the card. ctrl_regs is host-only (CVA6 reset).
 #
 # Fabric clock: 250 MHz (xdma_0/axi_aclk). At Gen3 x4 the XDMA's axi-stream
 # clock is fixed at 250 MHz. The SmartConnect, HBM AXI, and all peripherals
@@ -12,8 +14,9 @@
 #
 # Address map (unified — both XDMA host master and CVA6 see the same map):
 #   0x0001_0000 .. 0x0001_0FFF   bootrom        (4 KB BRAM, CVA6 reset vector)
-#   0x4000_0000 .. 0x4000_FFFF   console buffer
-#   0x6000_0000 .. 0x6000_000F   ctrl regs      (reset, doorbell, status)
+#   0x0010_0000 .. 0x0010_0FFF   sifive_test    (finisher / exit; QEMU VIRT_TEST)
+#   0x1000_0000 .. 0x1001_FFFF   uart16550      (guest regs @ +0; TX-drain @ +0x10000)
+#   0x6000_0000 .. 0x6000_000F   ctrl regs      (host-only: CVA6 reset / doorbell)
 #   0x6001_0000 .. 0x6001_0FFF   axi_iic        (PMIC / on-board LEDs)
 #   0x8000_0000 .. 0xBFFF_FFFF   HBM            (first 1 GiB of stack 0)
 #
@@ -168,18 +171,19 @@ connect_bd_net [get_bd_pins xdma_0/axi_aclk]               [get_bd_pins cva6_axi
 connect_bd_net [get_bd_pins xdma_0/axi_aresetn]            [get_bd_pins cva6_axi_cc/m_axi_aresetn]
 
 ##############
-# AXI SmartConnect — 2 masters (XDMA, CVA6), 5 slaves
+# AXI SmartConnect — 2 masters (XDMA, CVA6), 6 slaves
 #   M00: HBM SAXI_00
 #   M01: bootrom
-#   M02: console
-#   M03: ctrl_regs
-#   M04: axi_iic (PMIC + LEDs)
+#   M02: uart16550   (guest 16550 regs + host TX-drain window)
+#   M03: ctrl_regs   (host-only: CVA6 reset / doorbell)
+#   M04: axi_iic     (PMIC + LEDs)
+#   M05: sifive_test (finisher / exit)
 ##############
 
 create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_smc
 set_property -dict [list \
     CONFIG.NUM_SI {2} \
-    CONFIG.NUM_MI {5} \
+    CONFIG.NUM_MI {6} \
     CONFIG.NUM_CLKS {1} \
 ] [get_bd_cells axi_smc]
 connect_bd_net [get_bd_pins xdma_0/axi_aclk]    [get_bd_pins axi_smc/aclk]
@@ -203,13 +207,15 @@ connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins bootrom_0/axi_reset
 connect_bd_intf_net [get_bd_intf_pins axi_smc/M01_AXI] [get_bd_intf_pins bootrom_0/s_axi]
 
 ##############
-# Console buffer (64 KB at 0x40000000)
+# UART 16550 (128 KB window at 0x10000000)
+#   0x10000000..0x1000_0007  guest 16550 register map (QEMU virt UART0)
+#   0x10010000               host TX-drain: tx_len (offset 0), payload (>=8)
 ##############
 
-create_bd_cell -type module -reference axi_console_buffer console_0
-connect_bd_net [get_bd_pins xdma_0/axi_aclk]    [get_bd_pins console_0/axi_clk]
-connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins console_0/axi_resetn]
-connect_bd_intf_net [get_bd_intf_pins axi_smc/M02_AXI] [get_bd_intf_pins console_0/s_axi]
+create_bd_cell -type module -reference axi_uart16550 uart_0
+connect_bd_net [get_bd_pins xdma_0/axi_aclk]    [get_bd_pins uart_0/axi_clk]
+connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins uart_0/axi_resetn]
+connect_bd_intf_net [get_bd_intf_pins axi_smc/M02_AXI] [get_bd_intf_pins uart_0/s_axi]
 
 ##############
 # Control registers (16 B at 0x60000000)
@@ -229,9 +235,10 @@ connect_bd_intf_net [get_bd_intf_pins axi_smc/M03_AXI] [get_bd_intf_pins ctrl_0/
 connect_bd_net [get_bd_pins ctrl_0/cva6_rst_n]             [get_bd_pins cpu_rstgen/aux_reset_in]
 connect_bd_net [get_bd_pins cpu_rstgen/peripheral_aresetn] [get_bd_pins cva6_0/rst_n]
 
-# Host→CVA6 IRQ (PLIC src 1), CVA6→host IRQ (XDMA usr_irq)
+# Host→CVA6 IRQ (PLIC src 1). CVA6→host IRQ (XDMA usr_irq) is now driven by the
+# sifive_test finisher (guest writes 0x5555/0x3333 -> usr_irq). ctrl_0's
+# host_irq_out is left unconnected (vestigial until removed).
 connect_bd_net [get_bd_pins ctrl_0/host_irq]     [get_bd_pins cva6_0/host_irq]
-connect_bd_net [get_bd_pins ctrl_0/host_irq_out] [get_bd_pins xdma_0/usr_irq_req]
 
 ##############
 # AXI I2C (PMIC + 7 LEDs)
@@ -256,6 +263,18 @@ make_bd_pins_external [get_bd_pins led_inv/Res]
 set_property name led [get_bd_ports Res_0]
 
 ##############
+# SiFive test finisher (4 KB at 0x100000) — QEMU virt VIRT_TEST.
+# Guest writes 0x5555 (pass) / 0x3333 (fail) here to exit; that raises the
+# XDMA usr_irq so the host wakes, then reads back the latched result.
+##############
+
+create_bd_cell -type module -reference axi_sifive_test finisher_0
+connect_bd_net [get_bd_pins xdma_0/axi_aclk]    [get_bd_pins finisher_0/axi_clk]
+connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins finisher_0/axi_resetn]
+connect_bd_intf_net [get_bd_intf_pins axi_smc/M05_AXI] [get_bd_intf_pins finisher_0/s_axi]
+connect_bd_net [get_bd_pins finisher_0/test_irq] [get_bd_pins xdma_0/usr_irq_req]
+
+##############
 # Address map — both XDMA and CVA6 see the unified map.
 # HBM SAXI_00/HBM_MEM00..03 are placed at 0x80000000 (1 GiB window).
 ##############
@@ -264,16 +283,22 @@ set masters {/xdma_0/M_AXI /cva6_0/m_axi}
 
 foreach master $masters {
     set tag [expr {$master eq "/xdma_0/M_AXI" ? "xdma" : "cva6"}]
-    create_bd_addr_seg -range 4K  -offset 0x00010000 \
+    create_bd_addr_seg -range 4K   -offset 0x00010000 \
         [get_bd_addr_spaces $master] \
         [get_bd_addr_segs {/bootrom_0/s_axi/reg0}] SEG_bootrom_$tag
-    create_bd_addr_seg -range 64K -offset 0x40000000 \
+    # SiFive test finisher (QEMU virt VIRT_TEST)
+    create_bd_addr_seg -range 4K   -offset 0x00100000 \
         [get_bd_addr_spaces $master] \
-        [get_bd_addr_segs {/console_0/s_axi/reg0}] SEG_console_$tag
-    create_bd_addr_seg -range 4K  -offset 0x60000000 \
+        [get_bd_addr_segs {/finisher_0/s_axi/reg0}] SEG_finisher_$tag
+    # 16550 UART (QEMU virt UART0). 128 KB covers the guest regs (low) and the
+    # host TX-drain window at offset 0x10000.
+    create_bd_addr_seg -range 128K -offset 0x10000000 \
+        [get_bd_addr_spaces $master] \
+        [get_bd_addr_segs {/uart_0/s_axi/reg0}] SEG_uart_$tag
+    create_bd_addr_seg -range 4K   -offset 0x60000000 \
         [get_bd_addr_spaces $master] \
         [get_bd_addr_segs {/ctrl_0/s_axi/reg0}] SEG_ctrl_$tag
-    create_bd_addr_seg -range 4K  -offset 0x60010000 \
+    create_bd_addr_seg -range 4K   -offset 0x60010000 \
         [get_bd_addr_spaces $master] \
         [get_bd_addr_segs {/axi_iic_0/S_AXI/Reg}] SEG_iic_$tag
     # HBM: 4 × 256 MB segments at 0x80000000..0xBFFFFFFF

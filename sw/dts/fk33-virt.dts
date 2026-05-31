@@ -1,0 +1,68 @@
+/dts-v1/;
+
+/*
+ * Device tree for the FK33 card, modeled on QEMU's `virt` machine so the same
+ * baremetal RV64 binary sees a compatible platform on both. The host XDMA-loads
+ * the compiled .dtb to 0x88000000 and the bootrom passes that address in a1.
+ *
+ * This describes the *current* (first) bitstream: CPU, 1 GiB DRAM, 16550 UART0,
+ * and the SiFive test finisher. CLINT (timer) and PLIC (external interrupts)
+ * are added here when they land in the second bitstream — until then the UART
+ * has no interrupt-parent and there is no /soc/clint node.
+ */
+
+/ {
+    #address-cells = <2>;
+    #size-cells = <2>;
+    compatible = "tcl,fk33-virt", "riscv-virtio";
+    model = "cva6_acorn FK33 (virt-compatible)";
+
+    chosen {
+        stdout-path = "/soc/serial@10000000";
+    };
+
+    cpus {
+        #address-cells = <1>;
+        #size-cells = <0>;
+        timebase-frequency = <1000000>;   /* placeholder until CLINT/mtime exists */
+
+        cpu@0 {
+            device_type = "cpu";
+            reg = <0>;
+            status = "okay";
+            compatible = "riscv";
+            riscv,isa = "rv64imafdc";
+            mmu-type = "riscv,sv39";
+
+            cpu0_intc: interrupt-controller {
+                #interrupt-cells = <1>;
+                interrupt-controller;
+                compatible = "riscv,cpu-intc";
+            };
+        };
+    };
+
+    memory@80000000 {
+        device_type = "memory";
+        reg = <0x0 0x80000000 0x0 0x40000000>;   /* 1 GiB HBM window */
+    };
+
+    soc {
+        #address-cells = <2>;
+        #size-cells = <2>;
+        compatible = "simple-bus";
+        ranges;
+
+        serial@10000000 {
+            compatible = "ns16550a";
+            reg = <0x0 0x10000000 0x0 0x100>;
+            clock-frequency = <3686400>;
+            /* interrupt-parent/interrupts added with the PLIC (bitstream 2) */
+        };
+
+        test@100000 {
+            compatible = "sifive,test1", "sifive,test0", "syscon";
+            reg = <0x0 0x100000 0x0 0x1000>;
+        };
+    };
+};

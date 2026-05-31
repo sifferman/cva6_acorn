@@ -83,7 +83,7 @@ endif
 
 bitstream: $(BIT)
 
-$(BIT): $(BD_TCL) vivado/vivado.tcl $(XDC_FILE) vivado/shims/common_cells/registers.svh rtl/cva6_acorn_wrapper.v rtl/cva6_acorn_core.sv sw/bootrom/bootrom.memh
+$(BIT): $(BD_TCL) vivado/vivado.tcl $(XDC_FILE) vivado/shims/common_cells/registers.svh rtl/cva6_acorn_wrapper.v rtl/cva6_acorn_core.sv rtl/axi_uart16550.v rtl/axi_sifive_test.v rtl/axi_ctrl_regs.v sw/bootrom/bootrom.memh
 	rm -rf $(BUILD_DIR)/$(BD_NAME)
 	mkdir -p $(BUILD_DIR)
 	cd $(BUILD_DIR) && \
