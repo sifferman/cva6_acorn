@@ -9,12 +9,18 @@ OBJCOPY := $(CROSS)objcopy
 OBJDUMP := $(CROSS)objdump
 
 CFLAGS  := -march=$(ARCH) -mabi=$(ABI) -nostdlib -nostartfiles -fno-builtin -Os
+# Suppress the .note.gnu.build-id section. The riscv64-unknown-linux-gnu
+# toolchain emits it by default and the linker can place it at offset 0,
+# ahead of .text.start — which corrupts the reset vector at 0x10000 (CVA6
+# fetches the note header as its first instruction and faults). Harmless and
+# robust across both the bare-metal (-elf-) and linux-gnu toolchains.
+LDFLAGS := -Wl,--build-id=none
 
 .PHONY: all clean
 all: bootrom/bootrom.memh bootrom/bootrom.dump hello/hello.bin hello/hello.dump
 
 %.elf: %.S %.ld
-	$(CC) $(CFLAGS) -T $*.ld -o $@ $<
+	$(CC) $(CFLAGS) $(LDFLAGS) -T $*.ld -o $@ $<
 
 %.bin: %.elf
 	$(OBJCOPY) -O binary $< $@

@@ -16,6 +16,10 @@ create_clock -period 10.000 -name pcie_refclk [get_ports {pcie_refclk_clk_p[0]}]
 # PERST_N from the slot
 set_property -dict {PACKAGE_PIN BE24 IOSTANDARD LVCMOS18} [get_ports pcie_perstn]
 
+# PERST# is a fully asynchronous slot reset — don't try to time it to pcie_refclk
+# (clears the TIMING-18 "missing input delay" methodology warning).
+set_false_path -from [get_ports pcie_perstn]
+
 # CLKREQ# (tied constant high in the BD; the slot needs this driven)
 set_property -dict {PACKAGE_PIN BE25 IOSTANDARD LVCMOS18} [get_ports pcie_clkreq]
 
@@ -39,6 +43,25 @@ set_property PACKAGE_PIN AN2 [get_ports {pcie_rxp[3]}]
 set_property PACKAGE_PIN AN1 [get_ports {pcie_rxn[3]}]
 set_property PACKAGE_PIN AC7 [get_ports {pcie_txp[3]}]
 set_property PACKAGE_PIN AC6 [get_ports {pcie_txn[3]}]
+
+###############################################################################
+# 200 MHz system oscillator (Si5335A, free-running) — SYSCLK0_200 on the FK33.
+# Drives the HBM reference clocks and the MMCM input (see bd_fk33.tcl). Pins and
+# IOSTANDARD match the SQRL board file board_files/sqrl_fk33/1.1/sqrl_fk33.xdc.
+###############################################################################
+
+set_property -dict {PACKAGE_PIN BC26 IOSTANDARD LVDS} [get_ports {sysclk_200_clk_p[0]}]
+set_property -dict {PACKAGE_PIN BC27 IOSTANDARD LVDS} [get_ports {sysclk_200_clk_n[0]}]
+create_clock -period 5.000 -name sysclk_200 [get_ports {sysclk_200_clk_p[0]}]
+
+# The CPU / HBM-ref clock tree (derived from sysclk_200) and the PCIe/XDMA AXI
+# tree (derived from pcie_refclk) only ever meet through the async AXI clock
+# converter (cva6_axi_cc) and proc_sys_reset synchronisers — there is no
+# synchronous path between them. Declaring the two trees asynchronous clears the
+# TIMING-6 (no common primary clock) and TIMING-51 (no common phase) criticals.
+set_clock_groups -asynchronous \
+    -group [get_clocks -include_generated_clocks sysclk_200] \
+    -group [get_clocks -include_generated_clocks pcie_refclk]
 
 ###############################################################################
 # Local I2C — controls on-board PMIC (HBM rails, VCCAUX_IO, etc.)

@@ -90,26 +90,41 @@ foreach i {01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 
 
 ##############
 # Clock generation
-#   clk_in1  = 250 MHz from xdma/axi_aclk
+#   sysclk_200 = 200 MHz free-running board oscillator (FK33 SYSCLK0_200,
+#                Si5335A). It drives the HBM reference clocks directly and the
+#                MMCM input. The old topology fed the MMCM from xdma/axi_aclk
+#                (a PCIe GT clock-modifying-block output) and the HBM ref from
+#                an MMCM output (clk_out2), which produced the TIMING-3/4/27
+#                clock-redefinition critical warnings. The board file marks this
+#                oscillator preferred_ip=hbm — it is the intended HBM ref clock.
+#   clk_in1  = 200 MHz from sysclk_200
 #   clk_out1 = 100 MHz APB clock for HBM controller APB
-#   clk_out2 = 200 MHz HBM_REF_CLK_0/1
-#   clk_out3 = cpu_freq_mhz CVA6 clock
+#   clk_out2 = cpu_freq_mhz CVA6 clock
+#   (HBM_REF_CLK_0/1 now come straight from sysclk_200, not the MMCM.)
 ##############
+
+# Differential input buffer for the 200 MHz oscillator (pins set in the XDC).
+create_bd_cell -type ip -vlnv xilinx.com:ip:util_ds_buf:2.2 sysclk_buf
+set_property CONFIG.C_BUF_TYPE {IBUFDS} [get_bd_cells sysclk_buf]
+make_bd_intf_pins_external [get_bd_intf_pins sysclk_buf/CLK_IN_D]
+set_property name sysclk_200 [get_bd_intf_ports CLK_IN_D_0]
+# Declare the oscillator as 200 MHz so the frequency propagates through the
+# IBUFDS to clk_wiz_0/clk_in1 (otherwise it defaults to 100 MHz and mismatches).
+set_property CONFIG.FREQ_HZ 200000000 [get_bd_intf_ports sysclk_200]
 
 create_bd_cell -type ip -vlnv xilinx.com:ip:clk_wiz:6.0 clk_wiz_0
 set_property -dict [list \
-    CONFIG.PRIM_IN_FREQ                 {250.000} \
+    CONFIG.PRIM_SOURCE                  {Global_buffer} \
+    CONFIG.PRIM_IN_FREQ                 {200.000} \
     CONFIG.RESET_TYPE                   {ACTIVE_LOW} \
     CONFIG.RESET_PORT                   {resetn} \
     CONFIG.USE_LOCKED                   {true} \
     CONFIG.CLKOUT1_USED                 {true} \
     CONFIG.CLKOUT1_REQUESTED_OUT_FREQ   {100.000} \
     CONFIG.CLKOUT2_USED                 {true} \
-    CONFIG.CLKOUT2_REQUESTED_OUT_FREQ   {200.000} \
-    CONFIG.CLKOUT3_USED                 {true} \
-    CONFIG.CLKOUT3_REQUESTED_OUT_FREQ   $cpu_freq_mhz \
+    CONFIG.CLKOUT2_REQUESTED_OUT_FREQ   $cpu_freq_mhz \
 ] [get_bd_cells clk_wiz_0]
-connect_bd_net [get_bd_pins xdma_0/axi_aclk]     [get_bd_pins clk_wiz_0/clk_in1]
+connect_bd_net [get_bd_pins sysclk_buf/IBUF_OUT] [get_bd_pins clk_wiz_0/clk_in1]
 connect_bd_net [get_bd_pins xdma_0/axi_aresetn]  [get_bd_pins clk_wiz_0/resetn]
 
 # Reset for HBM domain (100 MHz APB clock)
@@ -119,8 +134,8 @@ connect_bd_net [get_bd_pins clk_wiz_0/locked]    [get_bd_pins hbm_reset/dcm_lock
 connect_bd_net [get_bd_pins xdma_0/axi_aresetn]  [get_bd_pins hbm_reset/ext_reset_in]
 
 # HBM clock/reset wiring
-connect_bd_net [get_bd_pins clk_wiz_0/clk_out2]      [get_bd_pins hbm_0/HBM_REF_CLK_0]
-connect_bd_net [get_bd_pins clk_wiz_0/clk_out2]      [get_bd_pins hbm_0/HBM_REF_CLK_1]
+connect_bd_net [get_bd_pins sysclk_buf/IBUF_OUT]     [get_bd_pins hbm_0/HBM_REF_CLK_0]
+connect_bd_net [get_bd_pins sysclk_buf/IBUF_OUT]     [get_bd_pins hbm_0/HBM_REF_CLK_1]
 connect_bd_net [get_bd_pins clk_wiz_0/clk_out1]      [get_bd_pins hbm_0/APB_0_PCLK]
 connect_bd_net [get_bd_pins clk_wiz_0/clk_out1]      [get_bd_pins hbm_0/APB_1_PCLK]
 connect_bd_net [get_bd_pins hbm_reset/peripheral_aresetn] [get_bd_pins hbm_0/APB_0_PRESET_N]
@@ -133,7 +148,7 @@ connect_bd_net [get_bd_pins xdma_0/axi_aresetn]      [get_bd_pins hbm_0/AXI_00_A
 ##############
 
 create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 cpu_rstgen
-connect_bd_net [get_bd_pins clk_wiz_0/clk_out3]  [get_bd_pins cpu_rstgen/slowest_sync_clk]
+connect_bd_net [get_bd_pins clk_wiz_0/clk_out2]  [get_bd_pins cpu_rstgen/slowest_sync_clk]
 connect_bd_net [get_bd_pins clk_wiz_0/locked]    [get_bd_pins cpu_rstgen/dcm_locked]
 connect_bd_net [get_bd_pins xdma_0/axi_aresetn]  [get_bd_pins cpu_rstgen/ext_reset_in]
 
@@ -142,12 +157,12 @@ connect_bd_net [get_bd_pins xdma_0/axi_aresetn]  [get_bd_pins cpu_rstgen/ext_res
 ##############
 
 create_bd_cell -type module -reference cva6_acorn_wrapper cva6_0
-connect_bd_net [get_bd_pins clk_wiz_0/clk_out3] [get_bd_pins cva6_0/clk]
+connect_bd_net [get_bd_pins clk_wiz_0/clk_out2] [get_bd_pins cva6_0/clk]
 
 # CVA6 master → axi_aclk SmartConnect
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_clock_converter:2.1 cva6_axi_cc
 connect_bd_intf_net [get_bd_intf_pins cva6_0/m_axi] [get_bd_intf_pins cva6_axi_cc/S_AXI]
-connect_bd_net [get_bd_pins clk_wiz_0/clk_out3]            [get_bd_pins cva6_axi_cc/s_axi_aclk]
+connect_bd_net [get_bd_pins clk_wiz_0/clk_out2]            [get_bd_pins cva6_axi_cc/s_axi_aclk]
 connect_bd_net [get_bd_pins cpu_rstgen/peripheral_aresetn] [get_bd_pins cva6_axi_cc/s_axi_aresetn]
 connect_bd_net [get_bd_pins xdma_0/axi_aclk]               [get_bd_pins cva6_axi_cc/m_axi_aclk]
 connect_bd_net [get_bd_pins xdma_0/axi_aresetn]            [get_bd_pins cva6_axi_cc/m_axi_aresetn]

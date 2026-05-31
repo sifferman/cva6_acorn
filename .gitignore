@@ -2,4 +2,9 @@
 *.bin
 *.memh
 *.dump
+*.jou
+*.log
+vivado.jou
+vivado.log
+*.backup
 build
