@@ -43,6 +43,18 @@ set_property -dict [list \
     CONFIG.xdma_axi_intf_mm             {AXI_Memory_Mapped} \
     CONFIG.xdma_pcie_64bit_en           {true} \
 ] [get_bd_cells xdma_0]
+# Stage 3: PCIe class code. The IP default for PF0 is 0x070001 ("serial
+# controller, 16550"), which makes the kernel's built-in 8250/serial driver
+# claim the endpoint at boot before the Xilinx xdma driver loads -> no
+# /dev/xdma0_* nodes. Present it as a Memory controller (0x058000) instead so
+# only the xdma driver binds it. (Mirrors this IP's own PF2 defaults.)
+set_property -dict [list \
+    CONFIG.pf0_base_class_menu          {Memory_controller} \
+    CONFIG.pf0_class_code_base          {05} \
+    CONFIG.pf0_sub_class_interface_menu {Other_memory_controller} \
+    CONFIG.pf0_class_code_sub           {80} \
+    CONFIG.pf0_class_code_interface     {00} \
+] [get_bd_cells xdma_0]
 
 # PCIe MGT lanes (top-level interface named "pcie")
 make_bd_intf_pins_external [get_bd_intf_pins xdma_0/pcie_mgt]

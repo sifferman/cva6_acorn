@@ -147,7 +147,15 @@ module axi_uart16550 #(
             reg_ier_q <= 8'h0; reg_lcr_q <= 8'h0; reg_mcr_q <= 8'h0;
             reg_scr_q <= 8'h0; reg_fcr_q <= 8'h0; reg_dll_q <= 8'h0;
             reg_dlm_q <= 8'h0; tx_len_q  <= 0;
+            // Write-handshake state (was previously left undriven -> bvalid
+            // stuck 0 -> writes never completed).
+            aw_seen_q  <= 1'b0; aw_off_q <= 3'd0; aw_drain_q <= 1'b0;
+            aw_id_q    <= {ID_WIDTH{1'b0}};
+            bvalid_q   <= 1'b0; bid_q    <= {ID_WIDTH{1'b0}};
         end else begin
+            aw_seen_q  <= aw_seen_d;  aw_off_q <= aw_off_d;  aw_drain_q <= aw_drain_d;
+            aw_id_q    <= aw_id_d;
+            bvalid_q   <= bvalid_d;   bid_q    <= bid_d;
             if (reg_we) begin
                 case (aw_off_q)
                     3'd0: if (dlab) reg_dll_q <= tx_byte;     // else THR -> capture

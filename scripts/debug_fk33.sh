@@ -1,143 +1,143 @@
 #!/usr/bin/env bash
-# FK33 bring-up diagnostic ladder. Run on the DEVICE machine (the one with the
-# Acorn/FK33 card and the XDMA driver loaded), not the build server.
+# FK33 host-side peripheral diagnostic for the QEMU-virt-compatible bitstream.
+# Run on the DEVICE machine (XDMA driver loaded, /dev/xdma0_*). It checks that
+# the host can reach and exercise each slave, independent of CVA6:
 #
-# Isolates "console buffer is empty" into one of:
-#   (1) PCIe/XDMA link dead              -> XDMA char devs missing / all reads fail
-#   (2) AXI fabric to BRAM slaves dead   -> SCRATCH/console loopback fails
-#   (3) clk_wiz unlocked / HBM uncalibrated -> BRAM loopback OK but HBM rw fails
-#   (4) CVA6 never released / never ran  -> HBM OK, binary loads, but STATUS stays 0
+#   ctrl_regs   0x60000000   (SCRATCH @ +0xC  -> fabric reachability + lane fix)
+#   uart16550   0x10000000   (regs; LSR must read 0x60; TX capture @ 0x10010000)
+#   finisher    0x00100000   (sifive_test; read-only here, see note below)
+#   HBM/DRAM    0x80000000   (clk_wiz lock + calibration)
+#   bootrom     0x00010000   (reset-vector BRAM)
 #
-# Case (3) is the prime FK33 suspect: the MMCM input moved to the board
-# sysclk_200 oscillator. No lock => CVA6 held in reset AND HBM never calibrates,
-# yet the PCIe-clocked console BRAM still answers => "runs clean, empty console".
+# This is a SUBSTRATE check. To run a guest program end-to-end use
+# run_baremetal.sh. NOTE: the UART TX test below appends a couple of bytes to
+# the capture buffer, and neither that buffer nor the finisher clear on a CVA6
+# reset (only on a PCIe/driver reset). For clean run_baremetal output, reload
+# the xdma driver (or power-cycle) after running this with the TX test.
+set -uo pipefail
 
-set -uo pipefail   # NOTE: no -e; we want to keep going after a failed probe.
-
-DMA_TO_DEV="${DMA_TO_DEV:-$(command -v dma_to_device || true)}"
-DMA_FROM_DEV="${DMA_FROM_DEV:-$(command -v dma_from_device || true)}"
+TO=$(command -v dma_to_device || true)
+FROM=$(command -v dma_from_device || true)
 H2C=/dev/xdma0_h2c_0
 C2H=/dev/xdma0_c2h_0
 
-DRAM_BASE=0x80000000
-CONSOLE_BASE=0x40000000
 CTRL_BASE=0x60000000
-SCRATCH=0x6000000C     # CTRL+0xC, free RW register, safe to clobber
-STATUS=0x60000008      # CTRL+0x8, written by CVA6
-CTRL_RST=0x60000000    # CTRL+0x0, bit0 = release CVA6
+SCRATCH=0x6000000C
+UART_REGS=0x10000000
+UART_TXLEN=0x10010000
+UART_TXDATA=0x10010008
+FINISH=0x100000
+HBM=0x80000000
+BOOTROM=0x10000
 
-HELLO_BIN="${HELLO_BIN:-sw/hello/hello.bin}"
+if [[ -z "$TO" || -z "$FROM" ]]; then
+    echo "dma_to_device / dma_from_device not on PATH" >&2; exit 1
+fi
+if [[ ! -e "$H2C" || ! -e "$C2H" ]]; then
+    echo "XDMA char devices missing — is the Xilinx xdma driver bound? (ls /dev/xdma*)" >&2; exit 1
+fi
 
 TMP=$(mktemp /tmp/fk33dbg.XXXXXX); rm -f "$TMP"
 trap 'sudo rm -f "$TMP"' EXIT
-
 pass(){ echo "    PASS: $*"; }
 fail(){ echo "    FAIL: $*"; }
 
-wr(){ # wr <addr> <4-byte-hex-le e.g. deadbeef>
-    local addr=$1 hex=$2
-    printf "$(echo "$hex" | sed 's/../\\x&/g')" \
-        | sudo "$DMA_TO_DEV" -d "$H2C" -a "$addr" -s 4 -f /dev/stdin >/dev/null 2>&1
-}
-rd(){ # rd <addr> <size> -> hex on stdout
+rdhex(){ # rdhex <addr> <size> -> contiguous hex string ("" on failure)
     sudo rm -f "$TMP"
-    sudo "$DMA_FROM_DEV" -d "$C2H" -a "$1" -s "$2" -f "$TMP" >/dev/null 2>&1
-    xxd -p "$TMP" 2>/dev/null | tr -d '\n'
+    sudo "$FROM" -d "$C2H" -a "$1" -s "$2" -f "$TMP" >/dev/null 2>&1 || { echo ""; return; }
+    xxd -p "$TMP" | tr -d '\n'
+}
+rd32(){ # rd32 <addr> -> decimal (4-byte LE)
+    local h; h=$(rdhex "$1" 4)
+    [[ -n "$h" ]] && echo $((16#${h:6:2}${h:4:2}${h:2:2}${h:0:2})) || echo -1
+}
+wr32(){ # wr32 <addr> <value>
+    local a=$1 v=$2
+    printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' \
+        $((v&0xff)) $(((v>>8)&0xff)) $(((v>>16)&0xff)) $(((v>>24)&0xff)))" \
+        | sudo "$TO" -d "$H2C" -a "$a" -s 4 -f /dev/stdin >/dev/null 2>&1
+}
+wr8(){ # wr8 <addr> <byte>
+    printf "$(printf '\\x%02x' $(( $2 & 0xff )))" \
+        | sudo "$TO" -d "$H2C" -a "$1" -s 1 -f /dev/stdin >/dev/null 2>&1
 }
 
 echo "=== 0. XDMA driver / char devices ==========================="
-if [[ -z "$DMA_TO_DEV" || -z "$DMA_FROM_DEV" ]]; then
-    fail "dma_to_device / dma_from_device not on PATH (build dma_ip_drivers/tools)"
-fi
-ls -l /dev/xdma0_* 2>&1 | sed 's/^/    /'
-[[ -e "$H2C" && -e "$C2H" ]] && pass "char devices present" \
-    || { fail "char devices missing -> driver not loaded or PCIe not enumerated"; \
-         echo "    -> check: lspci -d 10ee: ; dmesg | grep -i xdma ; sudo modprobe xdma"; }
-echo "    --- recent XDMA dmesg ---"
-sudo dmesg 2>/dev/null | grep -iE "xdma|usr_irq" | tail -n 8 | sed 's/^/    /'
+ls -l /dev/xdma0_h2c_0 /dev/xdma0_c2h_0 2>&1 | sed 's/^/    /'
+pass "char devices present"
+echo "    --- recent xdma dmesg ---"
+sudo dmesg 2>/dev/null | grep -iE "xdma" | tail -4 | sed 's/^/    /'
 
 echo
-echo "=== 1. AXI fabric -> SCRATCH register (PCIe-clocked) ========="
-echo "    (proves host can reach BRAM/reg slaves; independent of clk_wiz/HBM)"
-wr "$SCRATCH" "efbeadde"          # writes 0xdeadbeef LE
-got=$(rd "$SCRATCH" 4)
-echo "    wrote deadbeef, read back: ${got:-<none>}"
-[[ "$got" == "efbeadde" ]] && pass "fabric to ctrl-regs alive" \
-    || fail "cannot read/write SCRATCH -> XDMA reaches card but not user AXI (clock/reset/addr-map)"
+echo "=== 1. ctrl_regs SCRATCH loopback @ $SCRATCH (fabric + lane fix) ==="
+wr32 "$SCRATCH" $((0xdeadbeef))
+got=$(rd32 "$SCRATCH")
+printf "    wrote 0xdeadbeef, read back 0x%08x\n" "$got"
+(( got == 0xdeadbeef )) && pass "host->AXI fabric alive; ctrl_regs upper-word R/W ok" \
+    || fail "SCRATCH mismatch -> fabric/decode/lane problem"
 
 echo
-echo "=== 2. Console buffer loopback (PCIe-clocked BRAM) =========="
-wr "$CONSOLE_BASE" "78563412"     # 0x12345678 LE at console+0
-got=$(rd "$CONSOLE_BASE" 4)
-echo "    wrote 12345678, read back: ${got:-<none>}"
-[[ "$got" == "78563412" ]] && pass "console BRAM rw OK (host read path is fine)" \
-    || fail "console BRAM rw broken"
-wr "$CONSOLE_BASE" "00000000"     # clear header again
-
-echo
-echo "=== 3. HBM / DRAM @ 0x80000000 (clk_wiz lock + calibration) =="
-echo "    *** THE FK33 SMOKING GUN: if step 2 passed but this fails, ***"
-echo "    *** clk_wiz never locked or HBM never calibrated.          ***"
-wr "$DRAM_BASE" "0dd0feca"        # 0xcafed00d LE
-got=$(rd "$DRAM_BASE" 4)
-echo "    wrote cafed00d, read back: ${got:-<none>}"
-if [[ "$got" == "0dd0feca" ]]; then
-    pass "HBM read/write works -> clk_wiz locked, HBM calibrated"
-    HBM_OK=1
+echo "=== 2. UART 16550 register read @ $UART_REGS (LSR must be 0x60) ==="
+h=$(rdhex "$UART_REGS" 8)
+echo "    reg bytes [0..7]: ${h:-<read failed>}"
+if [[ -n "$h" ]]; then
+    lsr=${h:10:2}; iir=${h:4:2}
+    echo "    IIR(byte2)=0x$iir  LSR(byte5)=0x$lsr"
+    [[ "$lsr" == "60" ]] && pass "UART responds; LSR THRE+TEMT set (TX ready)" \
+        || fail "LSR != 0x60 -> UART read/decode wrong"
 else
-    fail "HBM not writable -> MMCM unlocked or HBM uncalibrated"
-    echo "    -> CVA6 is almost certainly held in reset too (shares clk_wiz lock)."
-    echo "    -> Check sysclk_200 pin/constraint in vivado/sqrl_fk33.xdc and that"
-    echo "       the 200 MHz board oscillator is actually present on this part."
-    HBM_OK=0
+    fail "UART register read failed (slave not responding)"
 fi
 
 echo
-echo "=== 4. Load firmware + verify it landed in DRAM ============="
-if [[ "${HBM_OK:-0}" == "1" && -f "$HELLO_BIN" ]]; then
-    SIZE=$(stat -c%s "$HELLO_BIN")
-    sudo "$DMA_TO_DEV" -d "$H2C" -a "$DRAM_BASE" -s "$SIZE" -f "$HELLO_BIN" >/dev/null 2>&1
-    want=$(xxd -p -l 16 "$HELLO_BIN" | tr -d '\n')
-    got=$(rd "$DRAM_BASE" 16)
-    echo "    bin first16:  $want"
-    echo "    dram first16: $got"
-    [[ "$want" == "$got" ]] && pass "hello.bin present in DRAM" \
-        || fail "DRAM readback != binary (HBM data integrity / addressing)"
+echo "=== 3. UART TX capture: write a byte, expect tx_len to increment ==="
+echo "    *** This is the write-path that was broken (undriven bvalid). ***"
+prev=$(rd32 "$UART_TXLEN")
+wr8 "$UART_REGS" 0x41          # 'A' -> THR (offset 0)
+now=$(rd32 "$UART_TXLEN")
+echo "    tx_len: $prev -> $now"
+if (( now == prev + 1 )); then
+    last=$(rdhex $((UART_TXDATA)) "$now"); last=${last: -2}
+    echo "    last payload byte: 0x$last (expect 41 = 'A')"
+    pass "UART AXI write completed (bvalid fix works)"
 else
-    echo "    skipped (HBM not OK, or $HELLO_BIN missing on this machine)"
+    fail "tx_len did not increment -> UART write still hanging/dropped"
 fi
 
 echo
-echo "=== 5. Bootrom present @ 0x10000 ============================"
-got=$(rd 0x00010000 16)
-echo "    bootrom first16: ${got:-<none>}"
-[[ -n "$got" && "$got" != "00000000000000000000000000000000" ]] \
-    && pass "bootrom BRAM non-zero (memh initialised)" \
-    || fail "bootrom reads zero -> bootrom.memh not loaded into BRAM at synth"
+echo "=== 4. sifive_test finisher read @ $FINISH (read-only) ==="
+fin=$(rd32 "$FINISH")
+printf "    finisher = 0x%08x\n" "$fin"
+if (( fin == 0 )); then
+    pass "finisher reachable, not latched (guest hasn't exited)"
+else
+    cmd=$((fin & 0xffff))
+    if (( cmd == 0x5555 )); then echo "    (latched PASS — from a prior guest or host write; clears on device reset)"
+    elif (( cmd == 0x3333 )); then echo "    (latched FAIL code=$(((fin>>16)&0xffff)))"
+    else echo "    (unexpected latched value)"; fi
+    pass "finisher reachable"
+fi
 
 echo
-echo "=== 6. Release CVA6 and watch STATUS / console ============="
-wr "$CONSOLE_BASE" "00000000"     # clear console length
-wr "$STATUS" "00000000"           # (host can't really clear it, but harmless)
-echo "    asserting reset (CTRL=0)..."; wr "$CTRL_RST" "00000000"
-echo "    CTRL readback: $(rd "$CTRL_RST" 4)  (expect 00000000)"
-echo "    releasing reset (CTRL=1)..."; wr "$CTRL_RST" "01000000"
-echo "    CTRL readback: $(rd "$CTRL_RST" 4)  (expect 01000000 -> reg latched)"
-echo "    polling STATUS @ $STATUS for 5s..."
-for i in $(seq 1 50); do
-    st=$(rd "$STATUS" 4)
-    if [[ -n "$st" && "$st" != "00000000" ]]; then
-        echo "    STATUS=$st after $((i*100))ms -> CVA6 RAN and signalled done"; break
-    fi
-    sleep 0.1
-done
-[[ "${st:-00000000}" == "00000000" ]] && \
-    fail "STATUS stayed 0 -> CVA6 never reached the doorbell store (no clock / still in reset / hung)"
-len=$(rd "$CONSOLE_BASE" 4)
-echo "    console length word: ${len:-<none>}"
+echo "=== 5. HBM / DRAM @ $HBM loopback (clk_wiz lock + calibration) ==="
+wr32 "$HBM" $((0xcafed00d))
+got=$(rd32 "$HBM")
+printf "    wrote 0xcafed00d, read back 0x%08x\n" "$got"
+(( got == 0xcafed00d )) && pass "HBM R/W ok" || fail "HBM not writable -> clk_wiz/calibration"
+
+echo
+echo "=== 6. bootrom @ $BOOTROM (expect new reset vector 732540f1...) ==="
+h=$(rdhex "$BOOTROM" 8)
+echo "    first 8 bytes: ${h:-<read failed>}"
+[[ "${h:0:8}" == "732540f1" ]] && pass "bootrom = csrr a0,mhartid (new DTB-aware bootrom)" \
+    || fail "unexpected bootrom contents"
+
 echo
 echo "=== interpretation ==========================================="
-echo "  step2 PASS, step3 FAIL  -> clk_wiz/sysclk_200 lock or HBM calibration (FK33)"
-echo "  step2 FAIL              -> XDMA reaches card but AXI fabric/addr-map broken"
-echo "  step0 FAIL              -> driver/PCIe enumeration problem"
-echo "  all PASS but step6 0    -> CVA6 reset/clock path (cpu_rstgen aux_reset_in)"
+echo "  All PASS  -> substrate good; run ./scripts/run_baremetal.sh for the guest test."
+echo "  Step 3 FAIL but step 2 PASS -> UART read ok, write path still broken."
+echo "  Step 1 FAIL -> host cannot reach the AXI fabric at all."
+echo
+echo "  NOTE: step 3 appended a byte to the UART capture buffer. It (and the"
+echo "  finisher) only clear on a PCIe/driver reset, not a CVA6 reset — reload"
+echo "  the xdma driver before run_baremetal.sh if you want pristine output."
