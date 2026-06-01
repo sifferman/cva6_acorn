@@ -76,13 +76,26 @@ DTB_SZ=$(stat -c%s "$DTB")
 echo "[*] Loading $DTB ($DTB_SZ B) -> DTB @ $DTB_BASE"
 sudo "$DMA_TO_DEV" -d "$H2C" -a "$DTB_BASE" -s "$DTB_SZ" -f "$DTB" >/dev/null
 
+# Clear residual peripheral state. On bitstreams with the clear paths this wipes
+# the finisher (FINISH_RESET=0x7777) and rewinds the UART capture buffer; on
+# older bitstreams these are no-ops and the snapshot below still handles residue.
+wr32 "$FINISH_BASE" 0x7777
+wr32 "$UART_TXLEN"  0
+
+# Snapshot peripheral state BEFORE release so we stream only THIS run's bytes and
+# detect a fresh finisher write rather than a stale one.
+prev=$(rd32 "$UART_TXLEN")
+fin0=$(rd32 "$FINISH_BASE")
+if [[ "$fin0" != "0" ]]; then
+    echo "[!] finisher pre-latched (0x$(printf %08x "$fin0")) from a prior run — reset the device (reboot/PCIe reset) for a pristine finisher result." >&2
+fi
+
 echo "[*] Releasing CVA6 reset"
 wr32 "$CTRL_BASE" 1
 
 echo "[*] ---- console ----"
-prev=0
 deadline=$((SECONDS + TIMEOUT_S))
-finish=0
+finish=$fin0
 drain() {  # print any newly-captured UART bytes (aligned full read + local slice)
     local len; len=$(rd32 "$UART_TXLEN")
     if (( len > prev )); then
@@ -94,15 +107,15 @@ drain() {  # print any newly-captured UART bytes (aligned full read + local slic
 while (( SECONDS < deadline )); do
     drain
     finish=$(rd32 "$FINISH_BASE")
-    (( finish != 0 )) && break
+    (( finish != fin0 )) && break          # fresh finisher write this run
     sleep 0.05
 done
 drain   # final drain between last poll and the finisher write
 echo
 echo "[*] ------------------"
 
-if (( finish == 0 )); then
-    echo "[!] Finisher never fired within ${TIMEOUT_S}s (guest still running or hung)." >&2
+if (( finish == fin0 )); then
+    echo "[!] Finisher unchanged within ${TIMEOUT_S}s (guest still running, hung, or finisher pre-latched to the same value)." >&2
     exit 2
 fi
 cmd=$((finish & 0xffff))

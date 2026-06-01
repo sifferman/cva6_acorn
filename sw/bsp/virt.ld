@@ -28,8 +28,12 @@ SECTIONS {
         *(.sdata*)
     } > RAM
 
-    . = ALIGN(8);
-    .bss (NOLOAD) : {
+    /* 8-align the section START (the ALIGN(8) section attribute), so _bss_start
+     * lands on an 8-byte boundary. crt0 clears bss with `sd` (8-byte stores);
+     * CVA6 traps on a misaligned store (QEMU silently emulates it), so an
+     * unaligned _bss_start hangs the CPU before main. _bss_end is ALIGN(8) too
+     * so the clear loop covers a whole number of doublewords. */
+    .bss (NOLOAD) : ALIGN(8) {
         _bss_start = .;
         *(.bss*)
         *(.sbss*)

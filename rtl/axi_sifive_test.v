@@ -117,7 +117,9 @@ module axi_sifive_test #(
             case (cmd)
                 CMD_PASS: begin result_d = s_axi_wdata[31:0]; done_d = 1'b1; pass_d = 1'b1; end
                 CMD_FAIL: begin result_d = s_axi_wdata[31:0]; done_d = 1'b1; pass_d = 1'b0; end
-                CMD_RESET: reset_d = 1'b1;
+                // RESET clears the latched result so the host can wipe residue
+                // between runs without a PCIe reset.
+                CMD_RESET: begin result_d = 32'h0; done_d = 1'b0; pass_d = 1'b0; reset_d = 1'b1; end
                 default: /* ignore unknown commands */ ;
             endcase
             if (s_axi_wlast && !bvalid_q) begin

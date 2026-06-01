@@ -117,6 +117,9 @@ module axi_uart16550 #(
     wire       reg_we       = wfire && !aw_drain_q && tx_lane_strb;
     wire       do_tx        = reg_we && (aw_off_q == 3'd0) && !dlab
                               && (tx_len_q < MAX_BYTES);
+    // Any host write to the drain window (@ +0x10000) rewinds the capture
+    // buffer, so the host can clear residue between runs without a PCIe reset.
+    wire       do_clear     = wfire && aw_drain_q;
 
     always @* begin
         aw_seen_d  = aw_seen_q;
@@ -167,7 +170,8 @@ module axi_uart16550 #(
                     default: ;                                 // LSR/MSR read-only
                 endcase
             end
-            if (do_tx) tx_len_q <= tx_len_q + 1'b1;
+            if (do_clear)   tx_len_q <= 0;
+            else if (do_tx) tx_len_q <= tx_len_q + 1'b1;
         end
     end
 
