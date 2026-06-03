@@ -1,7 +1,13 @@
 # Build bootrom (.memh for axi_bram_init $readmemh) and DRAM firmware (hello.bin).
 
+# The CVA6 on the card is RV64IMAC (no FPU). Build for exactly that subset so
+# the compiler can never emit an FP instruction — those are illegal on the core
+# and would trap/hang. lp64 (soft-float ABI) matches. QEMU virt is a superset,
+# so the same imac binary still runs there for the golden reference.
 CROSS ?= riscv64-unknown-elf-
-ARCH  ?= rv64imafdc
+# _zicsr: crt0 uses csrr/csrw (csr access is a separate extension in recent
+# toolchains and no longer implied by the base ISA string).
+ARCH  ?= rv64imac_zicsr
 ABI   ?= lp64
 
 CC      := $(CROSS)gcc
@@ -30,7 +36,8 @@ DTC        ?= dtc
 
 .PHONY: all clean qemu-run
 all: bootrom/bootrom.memh bootrom/bootrom.dump hello/hello.bin hello/hello.dump \
-     examples/hello/hello.bin examples/hello/hello.dump dts/fk33-virt.dtb
+     examples/hello/hello.bin examples/hello/hello.dump \
+     examples/arith/arith.bin examples/arith/arith.dump dts/fk33-virt.dtb
 
 # Device tree blob the host loads to 0x88000000 (passed in a1) on the card.
 dts/fk33-virt.dtb: dts/fk33-virt.dts
@@ -42,6 +49,23 @@ examples/hello/hello.elf: examples/hello/main.c $(BSP_SRCS) $(BSP_LD)
 
 # Run the example on QEMU's virt machine (UART0 -> stdio; finisher exits QEMU).
 qemu-run: examples/hello/hello.elf
+	$(QEMU) -machine virt -bios none -nographic -kernel $<
+
+# Arithmetic-consistency validation kernel (RV64IMAC differential check).
+# Build with EXTRA_CFLAGS=-DTEST_ATOMICS=1 to also validate the A extension
+# (needs the axi_riscv_atomics adapter in the loaded bitstream; QEMU is fine).
+examples/arith/arith.elf: examples/arith/main.c $(BSP_SRCS) $(BSP_LD)
+	$(CC) $(CFLAGS) $(BSP_CFLAGS) $(EXTRA_CFLAGS) $(LDFLAGS) -T $(BSP_LD) -o $@ examples/arith/main.c $(BSP_SRCS)
+
+# Capture the golden hash from QEMU (the reference the FPGA must reproduce).
+qemu-run-arith: examples/arith/arith.elf
+	$(QEMU) -machine virt -bios none -nographic -kernel $<
+
+# Per-operation atomics diagnostic (isolates which amo*/lr-sc op + width diverges).
+examples/atomic_probe/atomic_probe.elf: examples/atomic_probe/main.c $(BSP_SRCS) $(BSP_LD)
+	$(CC) $(CFLAGS) $(BSP_CFLAGS) $(LDFLAGS) -T $(BSP_LD) -o $@ examples/atomic_probe/main.c $(BSP_SRCS)
+
+qemu-run-atomic: examples/atomic_probe/atomic_probe.elf
 	$(QEMU) -machine virt -bios none -nographic -kernel $<
 
 %.elf: %.S %.ld
@@ -66,4 +90,5 @@ clean:
 	rm -f bootrom/bootrom.elf bootrom/bootrom.bin bootrom/bootrom.memh bootrom/bootrom.dump
 	rm -f hello/hello.elf hello/hello.bin hello/hello.dump
 	rm -f examples/hello/hello.elf examples/hello/hello.bin examples/hello/hello.dump
+	rm -f examples/arith/arith.elf examples/arith/arith.bin examples/arith/arith.dump
 	rm -f dts/fk33-virt.dtb

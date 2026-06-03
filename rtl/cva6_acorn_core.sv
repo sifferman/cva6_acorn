@@ -125,49 +125,90 @@ module cva6_acorn_core
     `AXI_ASSIGN_FROM_REQ(axi_intf, ariane_req)
     `AXI_ASSIGN_TO_RESP (ariane_resp, axi_intf)
 
-    // Plain-Verilog port driving from the interface ----------------------------
-    assign m_axi_awid     = axi_intf.aw_id;
-    assign m_axi_awaddr   = axi_intf.aw_addr;
-    assign m_axi_awlen    = axi_intf.aw_len;
-    assign m_axi_awsize   = axi_intf.aw_size;
-    assign m_axi_awburst  = axi_intf.aw_burst;
-    assign m_axi_awlock   = axi_intf.aw_lock;
-    assign m_axi_awcache  = axi_intf.aw_cache;
-    assign m_axi_awprot   = axi_intf.aw_prot;
-    assign m_axi_awqos    = axi_intf.aw_qos;
-    assign m_axi_awregion = axi_intf.aw_region;
-    assign m_axi_awvalid  = axi_intf.aw_valid;
-    assign axi_intf.aw_ready = m_axi_awready;
+    // RISC-V atomics adapter -----------------------------------------------------
+    // CVA6 emits RISC-V AMOs as AXI atomic transactions (aw.atop != 0) and LR/SC
+    // as AXI exclusive accesses, expecting downstream to resolve them. The plain
+    // AXI4 `m_axi` port below drops aw.atop and the SmartConnect/HBM cannot honour
+    // atomics or exclusive accesses, so an AMO's AW went out as an ordinary write
+    // and the core hung waiting for the atomic's R/B response. This adapter sits
+    // between CVA6 (slv, carries atop) and the bus (mst): it performs the
+    // read-modify-write for every AMO and tracks LR/SC reservations, so the
+    // downstream interface only ever sees ordinary, non-atomic AXI accesses.
+    AXI_BUS #(
+        .AXI_ADDR_WIDTH ( AxiAddrWidth ),
+        .AXI_DATA_WIDTH ( AxiDataWidth ),
+        .AXI_ID_WIDTH   ( AxiIdWidth   ),
+        .AXI_USER_WIDTH ( AxiUserWidth )
+    ) axi_mem();
 
-    assign m_axi_wdata   = axi_intf.w_data;
-    assign m_axi_wstrb   = axi_intf.w_strb;
-    assign m_axi_wlast   = axi_intf.w_last;
-    assign m_axi_wvalid  = axi_intf.w_valid;
-    assign axi_intf.w_ready = m_axi_wready;
+    axi_riscv_atomics_wrap #(
+        .AXI_ADDR_WIDTH     ( AxiAddrWidth ),
+        .AXI_DATA_WIDTH     ( AxiDataWidth ),
+        .AXI_ID_WIDTH       ( AxiIdWidth   ),
+        .AXI_USER_WIDTH     ( AxiUserWidth ),
+        .AXI_MAX_WRITE_TXNS ( 1            ),
+        .RISCV_WORD_WIDTH   ( 64           )
+    ) i_axi_riscv_atomics (
+        .clk_i  ( clk      ),
+        .rst_ni ( rst_n    ),
+        .slv    ( axi_intf ),   // from CVA6 (with atop / exclusive)
+        .mst    ( axi_mem  )    // to the bus (plain AXI4)
+    );
 
-    assign axi_intf.b_id    = m_axi_bid;
-    assign axi_intf.b_resp  = m_axi_bresp;
-    assign axi_intf.b_valid = m_axi_bvalid;
-    assign m_axi_bready  = axi_intf.b_ready;
+    // Plain-Verilog port driving from the (atomics-resolved) interface ----------
+    assign m_axi_awid     = axi_mem.aw_id;
+    assign m_axi_awaddr   = axi_mem.aw_addr;
+    assign m_axi_awlen    = axi_mem.aw_len;
+    assign m_axi_awsize   = axi_mem.aw_size;
+    // FIXED->INCR remap: the atomics adapter issues its injected AMO read and
+    // writeback as single-beat FIXED bursts (axi_riscv_amos.sv:392/736). Xilinx
+    // SmartConnect/HBM mishandle FIXED, returning garbage data with RRESP=OKAY.
+    // For a single beat (len=0) FIXED and INCR are identical, and CVA6's normal
+    // cache traffic is already INCR, so this remap only affects the AMO path.
+    assign m_axi_awburst  = (axi_mem.aw_burst == 2'b00) ? 2'b01 : axi_mem.aw_burst;
+    assign m_axi_awlock   = axi_mem.aw_lock;
+    assign m_axi_awcache  = axi_mem.aw_cache;
+    assign m_axi_awprot   = axi_mem.aw_prot;
+    assign m_axi_awqos    = axi_mem.aw_qos;
+    assign m_axi_awregion = axi_mem.aw_region;
+    assign m_axi_awvalid  = axi_mem.aw_valid;
+    assign axi_mem.aw_ready = m_axi_awready;
 
-    assign m_axi_arid     = axi_intf.ar_id;
-    assign m_axi_araddr   = axi_intf.ar_addr;
-    assign m_axi_arlen    = axi_intf.ar_len;
-    assign m_axi_arsize   = axi_intf.ar_size;
-    assign m_axi_arburst  = axi_intf.ar_burst;
-    assign m_axi_arlock   = axi_intf.ar_lock;
-    assign m_axi_arcache  = axi_intf.ar_cache;
-    assign m_axi_arprot   = axi_intf.ar_prot;
-    assign m_axi_arqos    = axi_intf.ar_qos;
-    assign m_axi_arregion = axi_intf.ar_region;
-    assign m_axi_arvalid  = axi_intf.ar_valid;
-    assign axi_intf.ar_ready = m_axi_arready;
+    assign m_axi_wdata   = axi_mem.w_data;
+    assign m_axi_wstrb   = axi_mem.w_strb;
+    assign m_axi_wlast   = axi_mem.w_last;
+    assign m_axi_wvalid  = axi_mem.w_valid;
+    assign axi_mem.w_ready = m_axi_wready;
 
-    assign axi_intf.r_id    = m_axi_rid;
-    assign axi_intf.r_data  = m_axi_rdata;
-    assign axi_intf.r_resp  = m_axi_rresp;
-    assign axi_intf.r_last  = m_axi_rlast;
-    assign axi_intf.r_valid = m_axi_rvalid;
-    assign m_axi_rready  = axi_intf.r_ready;
+    assign axi_mem.b_id    = m_axi_bid;
+    assign axi_mem.b_resp  = m_axi_bresp;
+    assign axi_mem.b_user  = '0;             // m_axi has no user channel; tie off
+    assign axi_mem.b_valid = m_axi_bvalid;
+    assign m_axi_bready  = axi_mem.b_ready;
+
+    assign m_axi_arid     = axi_mem.ar_id;
+    assign m_axi_araddr   = axi_mem.ar_addr;
+    assign m_axi_arlen    = axi_mem.ar_len;
+    assign m_axi_arsize   = axi_mem.ar_size;
+    assign m_axi_arburst  = (axi_mem.ar_burst == 2'b00) ? 2'b01 : axi_mem.ar_burst;  // FIXED->INCR (see awburst note)
+    assign m_axi_arlock   = axi_mem.ar_lock;
+    assign m_axi_arcache  = axi_mem.ar_cache;
+    assign m_axi_arprot   = axi_mem.ar_prot;
+    assign m_axi_arqos    = axi_mem.ar_qos;
+    assign m_axi_arregion = axi_mem.ar_region;
+    assign m_axi_arvalid  = axi_mem.ar_valid;
+    assign axi_mem.ar_ready = m_axi_arready;
+
+    assign axi_mem.r_id    = m_axi_rid;
+    assign axi_mem.r_data  = m_axi_rdata;
+    assign axi_mem.r_resp  = m_axi_rresp;
+    assign axi_mem.r_last  = m_axi_rlast;
+    assign axi_mem.r_user  = '0;             // m_axi has no user channel; tie off
+    assign axi_mem.r_valid = m_axi_rvalid;
+    assign m_axi_rready  = axi_mem.r_ready;
+
+    // The atomics adapter leaves aw.atop and exclusive (aw/ar.lock) resolved, so
+    // mst.aw_atop is always 0 here — nothing downstream needs it; intentionally
+    // not exported on the plain-Verilog m_axi port.
 
 endmodule

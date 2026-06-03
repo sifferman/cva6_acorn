@@ -27,6 +27,12 @@ set cva6_sources [lsearch -all -inline -not -exact $cva6_sources ""]
 # Extra files
 lappend cva6_sources \
     "$cva6_dir/vendor/pulp-platform/axi/src/axi_intf.sv" \
+    "$cva6_dir/vendor/pulp-platform/axi_riscv_atomics/src/axi_riscv_amos_alu.sv" \
+    "$cva6_dir/vendor/pulp-platform/axi_riscv_atomics/src/axi_riscv_amos.sv" \
+    "$cva6_dir/vendor/pulp-platform/axi_riscv_atomics/src/axi_res_tbl.sv" \
+    "$cva6_dir/vendor/pulp-platform/axi_riscv_atomics/src/axi_riscv_lrsc.sv" \
+    "$cva6_dir/vendor/pulp-platform/axi_riscv_atomics/src/axi_riscv_atomics.sv" \
+    "$cva6_dir/vendor/pulp-platform/axi_riscv_atomics/src/axi_riscv_atomics_wrap.sv" \
     "$cva6_dir/corev_apu/tb/ariane_axi_pkg.sv" \
     "$cva6_dir/common/local/util/tc_sram_fpga_wrapper.sv" \
     "$cva6_dir/common/local/util/hpdcache_sram_1rw.sv" \

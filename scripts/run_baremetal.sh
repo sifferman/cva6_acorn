@@ -76,12 +76,13 @@ DTB_SZ=$(stat -c%s "$DTB")
 echo "[*] Loading $DTB ($DTB_SZ B) -> DTB @ $DTB_BASE"
 sudo "$DMA_TO_DEV" -d "$H2C" -a "$DTB_BASE" -s "$DTB_SZ" -f "$DTB" >/dev/null
 
-# Clear residual peripheral state. On bitstreams with the clear paths this wipes
-# the finisher (FINISH_RESET=0x7777) and rewinds the UART capture buffer; on
-# older bitstreams these are no-ops and the snapshot below still handles residue.
-wr32 "$FINISH_BASE" 0x7777
-wr32 "$UART_TXLEN"  0
-
+# Do NOT host-write the finisher/UART to "clear" them: on the current bitstream a
+# host write to the sifive_test finisher never returns BVALID, so the H2C engine
+# stalls and the write fails with "error 512" (ERESTARTSYS) — which then wedges
+# the channel and makes the CTRL release below fail too (CVA6 never starts).
+# Residue is handled instead by the snapshot below: we only stream UART bytes
+# past `prev` and only treat the finisher as fired when it changes from `fin0`.
+#
 # Snapshot peripheral state BEFORE release so we stream only THIS run's bytes and
 # detect a fresh finisher write rather than a stale one.
 prev=$(rd32 "$UART_TXLEN")

@@ -183,6 +183,33 @@ connect_bd_net [get_bd_pins xdma_0/axi_aclk]               [get_bd_pins cva6_axi
 connect_bd_net [get_bd_pins xdma_0/axi_aresetn]            [get_bd_pins cva6_axi_cc/m_axi_aresetn]
 
 ##############
+# DEBUG: System ILA monitoring CVA6's m_axi (the atomics-adapter output, in the
+# clk_out2/CPU domain). Captures the AMO's injected read address + the rdata/
+# rresp it gets back, and the writeback's bresp. Used to diagnose the FIXED-burst
+# AMO bug (amo*.d read a constant 0xdec0dee3 with RRESP=OKAY); fixed by the
+# FIXED->INCR remap in cva6_acorn_core.sv, verified 2026-06-02. Left in (gated
+# off) for future AMO debugging. Set enable_amo_ila to 1 to re-instrument.
+# Trigger in the HW manager on SLOT_0_AXI ARVALID (or ARADDR == cell addr).
+##############
+set enable_amo_ila 0
+if {$enable_amo_ila} {
+    create_bd_cell -type ip -vlnv xilinx.com:ip:system_ila:1.1 amo_ila
+    set_property -dict [list \
+        CONFIG.C_NUM_MONITOR_SLOTS {1} \
+        CONFIG.C_MON_TYPE {INTERFACE} \
+        CONFIG.C_SLOT_0_INTF_TYPE {xilinx.com:interface:aximm_rtl:1.0} \
+        CONFIG.C_DATA_DEPTH {8192} \
+        CONFIG.C_ADV_TRIGGER {true} \
+    ] [get_bd_cells amo_ila]
+    # Attach the ILA monitor slot to the already-connected cva6_0/m_axi pin. A
+    # System ILA SLOT is a read-only monitor, so Vivado joins it to that pin's
+    # existing net (cva6_0/m_axi <-> cva6_axi_cc/S_AXI) rather than erroring.
+    connect_bd_intf_net [get_bd_intf_pins amo_ila/SLOT_0_AXI] [get_bd_intf_pins cva6_0/m_axi]
+    connect_bd_net [get_bd_pins clk_wiz_0/clk_out2]            [get_bd_pins amo_ila/clk]
+    connect_bd_net [get_bd_pins cpu_rstgen/peripheral_aresetn] [get_bd_pins amo_ila/resetn]
+}
+
+##############
 # AXI SmartConnect — 2 masters (XDMA, CVA6), 6 slaves
 #   M00: HBM SAXI_00
 #   M01: bootrom
